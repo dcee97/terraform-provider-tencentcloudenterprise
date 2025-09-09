@@ -1,0 +1,42 @@
+package tencentcloud
+
+import (
+	"fmt"
+	"testing"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
+)
+
+func TestAccTencentCloudDCDBShardsDataSource(t *testing.T) {
+	t.Parallel()
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:  func() { testAccPreCheck(t) },
+		Providers: testAccProviders,
+		Steps: []resource.TestStep{
+			{
+				Config: fmt.Sprintf(testAccDataSourceDcdbShards_basic, defaultDcdbInstanceId),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckTencentCloudDataSourceID("data.cloud_dcdb_shards.shards"),
+					resource.TestCheckResourceAttr("data.cloud_dcdb_shards.shards", "list.#", "2"),
+					resource.TestCheckResourceAttr("data.cloud_dcdb_shards.shards", "list.0.instance_id", defaultDcdbInstanceId),
+					resource.TestCheckResourceAttrSet("data.cloud_dcdb_shards.shards", "list.0.shard_instance_id"),
+					resource.TestCheckResourceAttr("data.cloud_dcdb_shards.shards", "list.1.instance_id", defaultDcdbInstanceId),
+					resource.TestCheckResourceAttrSet("data.cloud_dcdb_shards.shards", "list.1.shard_instance_id"),
+				),
+			},
+		},
+	})
+}
+
+const testAccDataSourceDcdbShards_basic = `
+data "cloud_dcdb_instances" "instances" {
+	instance_ids = ["%s"]
+}
+
+data "cloud_dcdb_shards" "shards" {
+	instance_id = data.cloud_dcdb_instances.instances.list.0.instance_id
+	shard_instance_ids = [data.cloud_dcdb_instances.instances.list.0.shard_detail.0.shard_instance_id, data.cloud_dcdb_instances.instances.list.0.shard_detail.1.shard_instance_id]
+}
+
+`

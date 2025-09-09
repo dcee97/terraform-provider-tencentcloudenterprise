@@ -1,0 +1,169 @@
+package tencentcloud
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
+)
+
+func init() {
+	resource.AddTestSweepers("cloud_dcdb_account", &resource.Sweeper{
+		Name: "cloud_dcdb_account",
+		F:    testSweepDCDBAccount,
+	})
+}
+
+// go test -v ./tencentcloud -sweep=ap-guangzhou -sweep-run=cloud_dcdb_account
+func testSweepDCDBAccount(r string) error {
+	logId := getLogId(contextNil)
+	ctx := context.WithValue(context.TODO(), logIdKey, logId)
+	cli, _ := sharedClientForRegion(r)
+	dcdbService := DcdbService{client: cli.(*TencentCloudClient).apiV3Conn}
+
+	accounts, err := dcdbService.DescribeDcdbAccount(ctx, defaultDcdbInstanceId, "")
+	if err != nil {
+		return err
+	}
+	if accounts == nil {
+		return fmt.Errorf("dcdb account not exists. instanceId:[%s]", defaultDcdbInstanceId)
+	}
+
+	for _, v := range accounts {
+		err := resource.Retry(readRetryTimeout, func() *resource.RetryError {
+			err := dcdbService.DeleteDcdbAccountById(ctx, defaultDcdbInstanceId, *v.UserName, *v.Host)
+			if err != nil {
+				return retryError(err)
+			}
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("[ERROR] delete dcdb account %s reason:[%s]", *v.UserName, err.Error())
+		}
+	}
+	return nil
+}
+
+func TestAccTencentCloudDcdbAccountResource_basic(t *testing.T) {
+	t.Parallel()
+	timestamp := time.Now().Nanosecond()
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckDcdbAccountDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: fmt.Sprintf(testAccDcdbAccount_basic, defaultDcdbInstanceId, timestamp),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckDcdbAccountExists("cloud_dcdb_account.basic"),
+					resource.TestCheckResourceAttrSet("cloud_dcdb_account.basic", "instance_id"),
+					resource.TestCheckResourceAttrSet("cloud_dcdb_account.basic", "user_name"),
+					resource.TestCheckResourceAttr("cloud_dcdb_account.basic", "host", "127.0.0.1"),
+					resource.TestCheckResourceAttr("cloud_dcdb_account.basic", "password", "===password==="),
+					resource.TestCheckResourceAttr("cloud_dcdb_account.basic", "description", "this is a test account"),
+					resource.TestCheckResourceAttr("cloud_dcdb_account.basic", "max_user_connections", "10"),
+					resource.TestCheckResourceAttr("cloud_dcdb_account.basic", "read_only", "0"),
+				),
+			},
+			{
+				Config: fmt.Sprintf(testAccDcdbAccount_update, defaultDcdbInstanceId, timestamp),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckDcdbAccountExists("cloud_dcdb_account.basic"),
+					resource.TestCheckResourceAttrSet("cloud_dcdb_account.basic", "instance_id"),
+					resource.TestCheckResourceAttrSet("cloud_dcdb_account.basic", "user_name"),
+					resource.TestCheckResourceAttr("cloud_dcdb_account.basic", "host", "127.0.0.1"),
+					resource.TestCheckResourceAttr("cloud_dcdb_account.basic", "password", "===password===updated==="),
+					resource.TestCheckResourceAttr("cloud_dcdb_account.basic", "description", "this is a changed test account"),
+					resource.TestCheckResourceAttr("cloud_dcdb_account.basic", "read_only", "0"),
+				),
+			},
+			{
+				ResourceName: "cloud_dcdb_account.basic",
+				ImportState:  true,
+			},
+		},
+	})
+}
+
+func testAccCheckDcdbAccountDestroy(s *terraform.State) error {
+	logId := getLogId(contextNil)
+	ctx := context.WithValue(context.TODO(), logIdKey, logId)
+
+	dcdbService := DcdbService{client: testAccProvider.Meta().(*TencentCloudClient).apiV3Conn}
+	for _, rs := range s.RootModule().Resources {
+		if rs.Type != "cloud_dcdb_account" {
+			continue
+		}
+		idSplit := strings.Split(rs.Primary.ID, FILED_SP)
+		instanceId := idSplit[0]
+		userName := idSplit[1]
+
+		accounts, err := dcdbService.DescribeDcdbAccount(ctx, instanceId, userName)
+		if err != nil {
+			return err
+		}
+		if len(accounts) > 0 {
+			return fmt.Errorf("dcdb account still exists: %s", rs.Primary.ID)
+		}
+	}
+	return nil
+}
+
+func testAccCheckDcdbAccountExists(re string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		logId := getLogId(contextNil)
+		ctx := context.WithValue(context.TODO(), logIdKey, logId)
+
+		rs, ok := s.RootModule().Resources[re]
+		if !ok {
+			return fmt.Errorf("dcdb account %s is not found", re)
+		}
+		if rs.Primary.ID == "" {
+			return fmt.Errorf("dcdb account id is not set")
+		}
+		idSplit := strings.Split(rs.Primary.ID, FILED_SP)
+		instanceId := idSplit[0]
+		userName := idSplit[1]
+
+		dcdbService := DcdbService{client: testAccProvider.Meta().(*TencentCloudClient).apiV3Conn}
+		account, err := dcdbService.DescribeDcdbAccount(ctx, instanceId, userName)
+		if err != nil {
+			return err
+		}
+		if account == nil {
+			return fmt.Errorf("dcdb account not exists: %s", rs.Primary.ID)
+		}
+		return nil
+	}
+}
+
+const testAccDcdbAccount_basic = `
+
+resource "cloud_dcdb_account" "basic" {
+	instance_id = "%s"
+	user_name = "mysql_%d"
+	host = "127.0.0.1"
+	password = "===password==="
+	read_only = 0
+	description = "this is a test account"
+	max_user_connections = 10
+}
+
+`
+const testAccDcdbAccount_update = `
+
+resource "cloud_dcdb_account" "basic" {
+  instance_id = "%s"
+  user_name = "mysql_%d"
+  host = "127.0.0.1"
+  password = "===password===updated==="
+  read_only = 0
+  description = "this is a changed test account"
+  max_user_connections = 10
+}
+
+`

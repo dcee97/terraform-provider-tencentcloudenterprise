@@ -1,0 +1,36 @@
+package tencentcloud
+
+import (
+	"fmt"
+	"testing"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
+)
+
+func TestAccTencentCloudDCDBParametersDataSource(t *testing.T) {
+	t.Parallel()
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:  func() { testAccPreCheck(t) },
+		Providers: testAccProviders,
+		Steps: []resource.TestStep{
+			{
+				Config: fmt.Sprintf(testAccDataSourceDcdbParameters_basic, defaultDcdbInstanceId),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckTencentCloudDataSourceID("data.cloud_dcdb_parameters.parameters"),
+					resource.TestCheckResourceAttrSet("data.cloud_dcdb_parameters.parameters", "list.#"),
+					resource.TestCheckResourceAttrSet("data.cloud_dcdb_parameters.parameters", "list.0.param"),
+					resource.TestCheckResourceAttrSet("data.cloud_dcdb_parameters.parameters", "list.0.value"),
+				),
+			},
+		},
+	})
+}
+
+const testAccDataSourceDcdbParameters_basic = `
+
+data "cloud_dcdb_parameters" "parameters" {
+  instance_id = "%s"
+  }
+
+`

@@ -1,0 +1,52 @@
+package tencentcloud
+
+import (
+	"testing"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
+)
+
+func TestAccTencentCloudCbsSnapshotsDataSource(t *testing.T) {
+	t.Parallel()
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheckCommon(t, ACCOUNT_TYPE_PREPAY) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckCbsSnapshotDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccCbsSnapshotsDataSource,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCheckSnapshotExists("cloud_cbs_snapshot.snapshot"),
+					resource.TestCheckResourceAttr("data.cloud_cbs_snapshots.snapshots", "snapshot_list.#", "1"),
+					resource.TestCheckResourceAttrSet("data.cloud_cbs_snapshots.snapshots", "snapshot_list.0.snapshot_id"),
+					resource.TestCheckResourceAttr("data.cloud_cbs_snapshots.snapshots", "snapshot_list.0.snapshot_name", "tf-test-snapshot"),
+					resource.TestCheckResourceAttrSet("data.cloud_cbs_snapshots.snapshots", "snapshot_list.0.storage_id"),
+					resource.TestCheckResourceAttr("data.cloud_cbs_snapshots.snapshots", "snapshot_list.0.storage_size", "50"),
+					resource.TestCheckResourceAttr("data.cloud_cbs_snapshots.snapshots", "snapshot_list.0.availability_zone", "ap-guangzhou-3"),
+					resource.TestCheckResourceAttrSet("data.cloud_cbs_snapshots.snapshots", "snapshot_list.0.percent"),
+					resource.TestCheckResourceAttrSet("data.cloud_cbs_snapshots.snapshots", "snapshot_list.0.create_time"),
+					resource.TestCheckResourceAttr("data.cloud_cbs_snapshots.snapshots", "snapshot_list.0.encrypt", "false"),
+				),
+			},
+		},
+	})
+}
+
+const testAccCbsSnapshotsDataSource = `
+resource "cloud_cbs_storage" "storage" {
+  availability_zone = "ap-guangzhou-3"
+  storage_size      = 50
+  storage_type      = "CLOUD_PREMIUM"
+  storage_name      = "tf-test-storage"
+}
+
+resource "cloud_cbs_snapshot" "snapshot" {
+  storage_id    = cloud_cbs_storage.storage.id
+  snapshot_name = "tf-test-snapshot"
+}
+
+data "cloud_cbs_snapshots" "snapshots" {
+  snapshot_id = cloud_cbs_snapshot.snapshot.id
+}
+`

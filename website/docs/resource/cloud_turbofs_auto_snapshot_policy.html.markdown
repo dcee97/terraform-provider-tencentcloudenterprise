@@ -1,0 +1,74 @@
+---
+subcategory: "CFS Turbo(Turbofs)"
+layout: "cloud"
+page_title: "TencentCloud: cloud_turbofs_auto_snapshot_policy"
+sidebar_current: "docs-cloud-resource-turbofs_auto_snapshot_policy"
+description: |-
+  Provides a resource to create a cfs auto_snapshot_policy
+---
+
+# cloud_turbofs_auto_snapshot_policy
+
+Provides a resource to create a cfs auto_snapshot_policy
+
+## Example Usage
+
+### use day of week
+
+```hcl
+resource "cloud_turbofs_auto_snapshot_policy" "auto_snapshot_policy" {
+  day_of_week = "1,2"
+  hour        = "2,3"
+  policy_name = "policy_name"
+  alive_days  = 7
+}
+```
+
+### use day of month
+
+```hcl
+resource "cloud_cfs_auto_snapshot_policy" "auto_snapshot_policy" {
+  hour         = "2,3"
+  policy_name  = "policy_name"
+  alive_days   = 7
+  day_of_month = "2,3,4"
+}
+```
+
+### use interval days
+
+```hcl
+resource "cloud_turbofs_auto_snapshot_policy" "auto_snapshot_policy" {
+  hour          = "2,3"
+  policy_name   = "policy_name"
+  alive_days    = 7
+  interval_days = 1
+}
+```
+
+### # Import
+
+turbofs auto_snapshot_policy can be imported using the id, e.g.
+
+```hcl
+terraform import cloud_turbofs_auto_snapshot_policy.auto_snapshot_policy auto_snapshot_policy_id
+```
+
+## Argument Reference
+
+The following arguments are supported:
+
+* `hour` - (Required, String) The time point when to repeat the snapshot operation.
+* `alive_days` - (Optional, Int) Snapshot retention period. default value is 0, which means the snapshot will be retained permanently.
+* `day_of_month` - (Optional, String) The day of the month on which to repeat the snapshot operation, conflict with day_of_week.
+* `day_of_week` - (Optional, String) The day of the week on which to repeat the snapshot operation, conflict with day_of_month.
+* `policy_name` - (Optional, String) Policy name.
+
+## Attributes Reference
+
+In addition to all arguments above, the following attributes are exported:
+
+* `id` - ID of the resource.
+* `auto_snapshot_policy_id` - The ID of the auto snapshot policy.
+
+

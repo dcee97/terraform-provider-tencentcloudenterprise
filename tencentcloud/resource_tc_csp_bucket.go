@@ -1,0 +1,1902 @@
+/*
+Provides a cos resource to create a COS bucket and set its attributes.
+
+Example Usage
+# Private Bucket
+
+```hcl
+
+	resource "cloud_csp_bucket" "mycsp" {
+	  bucket = "mycos-1258798060"
+	  acl    = "private"
+	}
+
+```
+
+# Creation of multiple available zone bucket
+
+```hcl
+
+	resource "cloud_csp_bucket" "mycsp" {
+	  bucket   = "mycos-1258798060"
+	  acl      = "private"
+	  versioning_enable = true
+	  force_clean       = true
+	}
+
+```
+
+# Static Website
+
+```hcl
+
+	resource "cloud_csp_bucket" "mycsp" {
+	  bucket = "mycsp-1258798060"
+
+	  website {
+	    index_document = "index.html"
+	    error_document = "error.html"
+	  }
+	}
+
+	output "endpoint_test" {
+	    value = cloud_csp_bucket.mycsp.website.0.endpoint
+	}
+
+```
+
+# Using CORS
+
+```hcl
+
+	resource "cloud_csp_bucket" "mycsp" {
+	  bucket = "mycsp-1258798060"
+	  acl    = "public-read-write"
+
+	  cors_rules {
+	    allowed_origins = ["http://*.abc.com"]
+	    allowed_methods = ["PUT", "POST"]
+	    allowed_headers = ["*"]
+	    max_age_seconds = 300
+	    expose_headers  = ["Etag"]
+	  }
+	}
+
+```
+
+# Using object lifecycle
+
+```hcl
+
+	resource "cloud_csp_bucket" "mycsp" {
+	  bucket = "mycsp-1258798060"
+	  acl    = "public-read-write"
+
+	  lifecycle_rules {
+	    filter_prefix = "path1/"
+
+	    expiration {
+	      days = 90
+	    }
+	  }
+	}
+
+```
+
+# Using custom origin domain settings
+
+```hcl
+
+	resource "cloud_csp_bucket" "with_origin" {
+	  bucket = "mycsp-1258798060"
+	  acl    = "private"
+	  origin_domain_rules {
+	    domain = "abc.example.com"
+	    type = "REST"
+	    status = "ENABLE"
+	  }
+	}
+
+```
+
+Using origin-pull settings
+```hcl
+
+	resource "cloud_csp_bucket" "with_origin" {
+	  bucket = "mycsp-1258798060"
+	  acl    = "private"
+	}
+
+```
+
+# Setting log status
+
+```hcl
+
+	resource "cloud_cam_role" "cspLogGrant" {
+	  name          = "CLS_QcsRole"
+	  document      = <<EOF
+
+	{
+	  "version": "2.0",
+	  "statement": [
+	    {
+	      "action": [
+	        "name/sts:AssumeRole"
+	      ],
+	      "effect": "allow",
+	      "principal": {
+	        "service": [
+	          "cls.cloud.tencent.com"
+	        ]
+	      }
+	    }
+	  ]
+	}
+
+EOF
+
+	  description   = "csp log enable grant"
+	}
+
+	data "cloud_cam_policies" "cspAccess" {
+	  name      = "QcloudcspAccessForCLSRole"
+	}
+
+	resource "cloud_cam_role_policy_attachment" "cspLogGrant" {
+	  role_id   = cloud_cam_role.cspLogGrant.id
+	  policy_id = data.cloud_cam_policies.cspAccess.policy_list.0.policy_id
+	}
+
+	resource "cloud_csp_bucket" "mylog" {
+	  bucket = "mylog-1258798060"
+	  acl    = "private"
+	}
+
+	resource "cloud_csp_bucket" "mycsp" {
+	  bucket = "mycsp-1258798060"
+	  acl    = "private"
+	  log_enable = true
+	  log_target_bucket = "mylog-1258798060"
+	  log_prefix = "MyLogPrefix"
+	}
+
+```
+
+# Import
+
+csp bucket can be imported, e.g.
+
+```
+$ terraform import cloud_csp_bucket.bucket bucket-name
+```
+*/
+package tencentcloud
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/tencentyun/cos-go-sdk-v5"
+
+	"terraform-provider-tencentcloudenterprise/tencentcloud/internal/helper"
+)
+
+func init() {
+	registerResourceDescriptionProvider("cloud_csp_bucket", CNDescription{
+		TerraformTypeCN: "创建存储桶（CSP）",
+		DescriptionCN:   "提供CSP存储桶资源，用于创建和管理CSP存储桶及其属性。",
+		AttributesCN: map[string]string{
+			"bucket":               "存储桶名称，格式为[自定义名称]-[appid]，例如：mycos-1258798060，appid可以在账号中心获取",
+			"acl":                  "权限控制, 可取值包括private(私有读写), public-read(公有读私有写)和public-read-write(公有读写)",
+			"encryption_algorithm": "加密算法, 合法取值包括AES256、SM4",
+			"versioning_enable":    "版本控制",
+			"acceleration_enable":  "加速配置",
+			"force_clean":          "强制清空存储桶",
+			//"replica_role":            "跨区域复制角色",
+			//"replica_rules":           "跨区域复制规则",
+			"id":                        "规则名称",
+			"status":                    "跨区复制状态",
+			"prefix":                    "前缀匹配策略",
+			"destination_bucket":        "目标存储桶",
+			"destination_storage_class": "目标存储类型",
+			"cors_rules":                "跨域资源共享规则",
+			"allowed_origins":           "允许的源",
+			"allowed_methods":           "允许的方法",
+			"allowed_headers":           "允许的头部",
+			"max_age_seconds":           "最大缓存时间",
+			"expose_headers":            "暴露的头部",
+			"lifecycle_rules":           "生命周期规则，请至少填写一项非必选参数：non_current_expiration和expiration",
+			"filter_prefix":             "前缀匹配策略",
+			//"transition":                "过渡配置",
+			"expiration":     "当前版本文件过期配置",
+			"website":        "静态网站配置",
+			"index_document": "首页文档",
+			"error_document": "错误文档",
+			// "endpoint":                  "静态网站域名",
+			"tags":              "标签",
+			"log_enable":        "日志开启",
+			"log_target_bucket": "日志存储桶",
+			"log_prefix":        "日志前缀",
+			"cos_bucket_url":    "存储桶访问地址",
+			//"non_current_transition": "非当前对象过渡配置",
+			"non_current_days":       "非当前版本指定规则生效天数，例如在非当前版本过期配置下，会在non_current_days天后过期",
+			"storage_class":          "存储类型",
+			"non_current_expiration": "非当前版本文件过期配置",
+			"days":                   "当前版本指定规则生效天数，例如在当前版本过期配置下，会在days天后过期",
+			"delete_marker":          "删除标记，该选项与expiration(当前版本文件过期配置)互斥，是版本控制中的逻辑标记，用于 “删除” 对象时保留历史版本，避免物理删除，可通过移除该标记恢复数据。",
+		},
+	})
+}
+
+//func originPullRules() *schema.Resource {
+//	return &schema.Resource{
+//		Schema: map[string]*schema.Schema{
+//			"priority": {
+//				Type:        schema.TypeInt,
+//				Required:    true,
+//				Description: "Priority of origin-pull rules, do not set the same value for multiple rules.",
+//			},
+//			"sync_back_to_source": {
+//				Type:        schema.TypeBool,
+//				Optional:    true,
+//				Default:     false,
+//				Description: "If `true`, COS will not return 3XX status code when pulling data from an origin server. Current available zone: ap-beijing, ap-shanghai, ap-singapore, ap-mumbai.",
+//			},
+//			"prefix": {
+//				Type:        schema.TypeString,
+//				Optional:    true,
+//				Default:     "",
+//				Description: "Triggers the origin-pull rule when the requested file name matches this prefix.",
+//			},
+//			"protocol": {
+//				Type:        schema.TypeString,
+//				Optional:    true,
+//				Default:     "",
+//				Description: "The protocol used for COS to access the specified origin server. The available value include `HTTP`, `HTTPS` and `FOLLOW`.",
+//			},
+//			"host": {
+//				Type:        schema.TypeString,
+//				Required:    true,
+//				Description: "Allows only a domain name or IP address. You can optionally append a port number to the address.",
+//			},
+//			"follow_query_string": {
+//				Type:        schema.TypeBool,
+//				Optional:    true,
+//				Default:     true,
+//				Description: "Specifies whether to pass through COS request query string when accessing the origin server.",
+//			},
+//			"follow_redirection": {
+//				Type:        schema.TypeBool,
+//				Optional:    true,
+//				Default:     true,
+//				Description: "Specifies whether to follow 3XX redirect to another origin server to pull data from.",
+//			},
+//"copy_origin_data": {
+//	Type:		 schema.TypeBool,
+//	Optional: 	 true,
+//	Default:	 true,
+//	Description: "",
+//},
+//"follow_http_headers": {
+//	Type:     schema.TypeSet,
+//	Optional: true,
+//	Set: func(i interface{}) int {
+//		return helper.HashString(i.(string))
+//	},
+//	Description: "Specifies the pass through headers when accessing the origin server.",
+//	Elem:        &schema.Schema{Type: schema.TypeString},
+//},
+//"custom_http_headers": {
+//	Type:        schema.TypeMap,
+//	Optional:    true,
+//	Description: "Specifies the custom headers that you can add for COS to access your origin server.",
+//},
+//"redirect_prefix": {
+//	Type:		schema.TypeString,
+//	Optional:   true,
+//	Description: "Prefix for the file to which a request is redirected when the origin-pull rule is triggered.",
+//},
+//"redirect_suffix": {
+//	Type:		schema.TypeString,
+//	Optional:   true,
+//	Description: "Suffix for the file to which a request is redirected when the origin-pull rule is triggered.",
+//},
+//		},
+//	}
+//}
+
+// x-cos-grant-* headers may conflict with xml acl body, we don't open up for now.
+//func aclGrantHeaders() *schema.Schema {
+//	return &schema.Schema{
+//		Type:        schema.TypeMap,
+//		Optional:    true,
+//		Description: "ACL x-cos-grant-* headers for multiple grand info",
+//		Elem: &schema.Resource{
+//			Schema: map[string]*schema.Schema{
+//				"grant_read": {
+//					Type:        schema.TypeString,
+//					Optional:    true,
+//					Description: "Allows grantee to read the bucket; format: `id=\"[OwnerUin]\"`.Use comma (,) to separate multiple users, e.g `id=\"100000000001\",id=\"100000000002\"`",
+//				},
+//				"grant_write": {
+//					Type:        schema.TypeString,
+//					Optional:    true,
+//					Description: "Allows grantee to write to the bucket; format: `id=\"[OwnerUin]\"`.Use comma (,) to separate multiple users, e.g `id=\"100000000001\",id=\"100000000002\"`",
+//				},
+//				"grant_read_acp": {
+//					Type:        schema.TypeString,
+//					Optional:    true,
+//					Description: "Allows grantee to read the ACL of the bucket; format: `id=\"[OwnerUin]\"`.Use comma (,) to separate multiple users, e.g `id=\"100000000001\",id=\"100000000002\"`",
+//				},
+//				"grant_write_acp": {
+//					Type:        schema.TypeString,
+//					Optional:    true,
+//					Description: "Allows grantee to write the ACL of the bucket; format: `id=\"[OwnerUin]\"`.Use comma (,) to separate multiple users, e.g `id=\"100000000001\",id=\"100000000002\"`",
+//				},
+//				"grant_full_control": {
+//					Type:        schema.TypeString,
+//					Optional:    true,
+//					Description: "Grants a user full permission to perform operations on the bucket; format: `id=\"[OwnerUin]\"`.Use comma (,) to separate multiple users, e.g `id=\"100000000001\",id=\"100000000002\"`",
+//				},
+//			},
+//		},
+//	}
+//}
+
+func resourceTencentCloudCspBucket() *schema.Resource {
+	return &schema.Resource{
+		Description: "Provides a csp resource to create a csp bucket and set its attributes.",
+		Create:      resourceTencentCloudCspBucketCreate,
+		Read:        resourceTencentCloudCspBucketRead,
+		Update:      resourceTencentCloudCspBucketUpdate,
+		Delete:      resourceTencentCloudCspBucketDelete,
+		Importer: &schema.ResourceImporter{
+			State: helper.ImportWithDefaultValue(map[string]interface{}{
+				"force_clean": false,
+			}),
+		},
+
+		Schema: map[string]*schema.Schema{
+			"bucket": {
+				Type:         schema.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validateCosBucketName,
+				Description:  "The name of a bucket to be created. Bucket format should be [custom name]-[appid], for example `mycsp-1258798060`.",
+			},
+			"acl": {
+				Type:     schema.TypeString,
+				Optional: true,
+				Default:  s3.ObjectCannedACLPrivate,
+				ValidateFunc: validateAllowedStringValue([]string{
+					s3.ObjectCannedACLPrivate,
+					s3.ObjectCannedACLPublicRead,
+					s3.ObjectCannedACLPublicReadWrite,
+				}),
+				Description: "The canned ACL to apply. Valid values: private, public-read, and public-read-write. Defaults to private.",
+			},
+			//"acl_body": {
+			//	Type:     schema.TypeString,
+			//	Optional: true,
+			//
+			//	DiffSuppressFunc: func(k, olds, news string, d *schema.ResourceData) bool {
+			//		var oldXML cos.BucketGetACLResult
+			//		err := xml.Unmarshal([]byte(olds), &oldXML)
+			//		if err != nil {
+			//			return olds == news
+			//		}
+			//		var newXML cos.BucketGetACLResult
+			//		err = xml.Unmarshal([]byte(news), &newXML)
+			//		if err != nil {
+			//			return olds == news
+			//		}
+			//		suppress := reflect.DeepEqual(oldXML, newXML)
+			//		return suppress
+			//	},
+			//	Description: "ACL XML body for multiple grant info. NOTE: this argument will overwrite `acl`. Check https://intl.cloud.tencent.com/document/product/436/7737 for more detail.",
+			//},
+			"encryption_algorithm": {
+				Type:     schema.TypeString,
+				Optional: true,
+				ValidateFunc: validateAllowedStringValue([]string{
+					"AES256",
+					"SM4",
+				}),
+				Description: "The server-side encryption algorithm to use. Valid value is `AES256`, `SM4`.",
+			},
+			"versioning_enable": {
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Default:     false,
+				Description: "Enable bucket versioning.",
+			},
+			// "acceleration_enable": {
+			// 	Type:        schema.TypeBool,
+			// 	Optional:    true,
+			// 	Default:     false,
+			// 	Description: "Enable bucket acceleration.",
+			// },
+			// "force_clean": {
+			// 	Type:        schema.TypeBool,
+			// 	Optional:    true,
+			// 	Default:     false,
+			// 	Description: "Force cleanup all objects before delete bucket.",
+			// },
+			// "replica_role": {
+			// 	Type:         schema.TypeString,
+			// 	Optional:     true,
+			// 	RequiredWith: []string{"replica_rules", "versioning_enable"},
+			// 	Description:  "Request initiator identifier, format: `qcs::cam::uin/<owneruin>:uin/<subuin>`. NOTE: only `versioning_enable` is true can configure this argument.",
+			// },
+			// "replica_rules": {
+			// 	Type:         schema.TypeList,
+			// 	Optional:     true,
+			// 	Description:  "List of replica rule. NOTE: only `versioning_enable` is true and `replica_role` set can configure this argument.",
+			// 	RequiredWith: []string{"replica_role", "versioning_enable"},
+			// 	Elem: &schema.Resource{
+			// 		Schema: map[string]*schema.Schema{
+			// 			"id": {
+			// 				Type:        schema.TypeString,
+			// 				Optional:    true,
+			// 				Description: "Name of a specific rule.",
+			// 			},
+			// 			"status": {
+			// 				Type:        schema.TypeString,
+			// 				Required:    true,
+			// 				Description: "Status identifier, available values: `Enabled`, `Disabled`.",
+			// 			},
+			// 			"prefix": {
+			// 				Type:        schema.TypeString,
+			// 				Optional:    true,
+			// 				Description: "Prefix matching policy. Policies cannot overlap; otherwise, an error will be returned. To match the root directory, leave this parameter empty.",
+			// 			},
+			// 			"destination_bucket": {
+			// 				Type:        schema.TypeString,
+			// 				Required:    true,
+			// 				Description: "Destination bucket identifier, format: `qcs::cos:<region>::<bucketname-appid>`. NOTE: destination bucket must enable versioning.",
+			// 			},
+			// 			"destination_storage_class": {
+			// 				Type:        schema.TypeString,
+			// 				Optional:    true,
+			// 				Description: "Storage class of destination, available values: `STANDARD`, `INTELLIGENT_TIERING`, `STANDARD_IA`. default is following current class of destination.",
+			// 			},
+			// 		},
+			// 	},
+			// },
+			"cors_rules": {
+				Type:        schema.TypeList,
+				Optional:    true,
+				Description: "A rule of Cross-Origin Resource Sharing (documented below).",
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"allowed_origins": {
+							Type:        schema.TypeList,
+							Required:    true,
+							Elem:        &schema.Schema{Type: schema.TypeString},
+							Description: "Specifies which origins are allowed.",
+						},
+						"allowed_methods": {
+							Type:        schema.TypeList,
+							Required:    true,
+							Elem:        &schema.Schema{Type: schema.TypeString},
+							Description: "Specifies which methods are allowed. Can be `GET`, `PUT`, `POST`, `DELETE` or `HEAD`.",
+						},
+						"allowed_headers": {
+							Type:        schema.TypeList,
+							Required:    true,
+							Elem:        &schema.Schema{Type: schema.TypeString},
+							Description: "Specifies which headers are allowed.",
+						},
+						"max_age_seconds": {
+							Type:        schema.TypeInt,
+							Optional:    true,
+							Description: "Specifies time in seconds that browser can cache the response for a preflight request.",
+						},
+						"expose_headers": {
+							Type:        schema.TypeList,
+							Optional:    true,
+							Elem:        &schema.Schema{Type: schema.TypeString},
+							Description: "Specifies expose header in the response.",
+						},
+					},
+				},
+			},
+			//"origin_pull_rules": {
+			//	Type:        schema.TypeList,
+			//	Optional:    true,
+			//	Description: "Bucket Origin-Pull settings.",
+			//	Elem:        originPullRules(),
+			//},
+			//"origin_domain_rules": {
+			//	Type:        schema.TypeList,
+			//	Optional:    true,
+			//	Description: "Bucket Origin Domain settings.",
+			//	Elem: &schema.Resource{
+			//		Schema: map[string]*schema.Schema{
+			//			"domain": {
+			//				Type:        schema.TypeString,
+			//				Required:    true,
+			//				Description: "Specify domain host.",
+			//			},
+			//			"type": {
+			//				Type:        schema.TypeString,
+			//				Optional:    true,
+			//				Default:     "REST",
+			//				Description: "Specify origin domain type, available values: `REST`, `WEBSITE`, `ACCELERATE`, default: `REST`.",
+			//			},
+			//			"status": {
+			//				Type:         schema.TypeString,
+			//				Optional:     true,
+			//				Default:      "ENABLED",
+			//				Description:  "Domain status, default: `ENABLED`.",
+			//				ValidateFunc: validateAllowedStringValue([]string{"ENABLED", "DISABLED"}),
+			//			},
+			//"force_replacement": {
+			//	Type:		 schema.TypeString,
+			//	Optional: 	 true,
+			//	Description: "Specify type to replace exist domain resolve record.",
+			//},
+			//		},
+			//	},
+			//},
+			"lifecycle_rules": {
+				Type:        schema.TypeList,
+				Optional:    true,
+				Description: "A configuration of object lifecycle management (documented below).",
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"id": {
+							Type:        schema.TypeString,
+							Required:    true,
+							Description: "A unique identifier for the rule. It can be up to 255 characters.",
+						},
+						"filter_prefix": {
+							Type:        schema.TypeString,
+							Required:    true,
+							Description: "Object key prefix identifying one or more objects to which the rule applies.",
+						},
+						//"transition": {
+						//	Type:        schema.TypeSet,
+						//	Optional:    true,
+						//	Set:         transitionHash,
+						//	Default:     nil,
+						//	Description: "Specifies a period in the object's transitions (documented below).",
+						//	Elem: &schema.Resource{
+						//		Schema: map[string]*schema.Schema{
+						//			//"date": {
+						//			//	Type:         schema.TypeString,
+						//			//	Optional:     true,
+						//			//	ValidateFunc: validateCosBucketLifecycleTimestamp,
+						//			//	Description:  "Specifies the date after which you want the corresponding action to take effect.",
+						//			//},
+						//			"days": {
+						//				Type:         schema.TypeInt,
+						//				Required:     true,
+						//				ValidateFunc: validateIntegerMin(0),
+						//				Description:  "Specifies the number of days after object creation when the specific rule action takes effect.",
+						//			},
+						//			"storage_class": {
+						//				Type:        schema.TypeString,
+						//				Required:    true,
+						//				Description: "Specifies the storage class to which you want the object to transition. Available values include `STANDARD_IA`, `MAZ_STANDARD_IA`, `INTELLIGENT_TIERING`, `MAZ_INTELLIGENT_TIERING`, `ARCHIVE`, `DEEP_ARCHIVE`. For more information, please refer to: https://cloud.tencent.com/document/product/436/33417.",
+						//			},
+						//		},
+						//	},
+						//},
+						"expiration": {
+							Type:        schema.TypeSet,
+							Optional:    true,
+							Set:         expirationHash,
+							MaxItems:    1,
+							Default:     nil,
+							Description: "Specifies a period in the object's expire (documented below).",
+							Elem: &schema.Resource{
+								Schema: map[string]*schema.Schema{
+									//"date": {
+									//	Type:         schema.TypeString,
+									//	Optional:     true,
+									//	ValidateFunc: validateCosBucketLifecycleTimestamp,
+									//	Description:  "Specifies the date after which you want the corresponding action to take effect.",
+									//},
+									"days": {
+										Type:         schema.TypeInt,
+										Optional:     true,
+										ValidateFunc: validateIntegerMin(0),
+										Description:  "Specifies the number of days after object creation when the specific rule action takes effect.",
+									},
+									"delete_marker": {
+										Type:        schema.TypeBool,
+										Optional:    true,
+										Description: "Indicates whether the delete marker of an expired object will be removed.",
+									},
+								},
+							},
+						},
+						//"non_current_transition": {
+						//	Type:        schema.TypeSet,
+						//	Optional:    true,
+						//	Set:         nonCurrentTransitionHash,
+						//	Default:     nil,
+						//	Description: "Specifies a period in the non current object's transitions.",
+						//	Elem: &schema.Resource{
+						//		Schema: map[string]*schema.Schema{
+						//			"non_current_days": {
+						//				Type:         schema.TypeInt,
+						//				Optional:     true,
+						//				ValidateFunc: validateIntegerMin(0),
+						//				Description:  "Number of days after non current object creation when the specific rule action takes effect.",
+						//			},
+						//			"storage_class": {
+						//				Type:        schema.TypeString,
+						//				Required:    true,
+						//				Description: "Specifies the storage class to which you want the non current object to transition. Available values include `STANDARD_IA`, `MAZ_STANDARD_IA`, `INTELLIGENT_TIERING`, `MAZ_INTELLIGENT_TIERING`, `ARCHIVE`, `DEEP_ARCHIVE`. For more information, please refer to: https://cloud.tencent.com/document/product/436/33417.",
+						//			},
+						//		},
+						//	},
+						//},
+						"non_current_expiration": {
+							Type:        schema.TypeSet,
+							Optional:    true,
+							Set:         nonCurrentExpirationHash,
+							MaxItems:    1,
+							Default:     nil,
+							Description: "Specifies when non current object versions shall expire.",
+							Elem: &schema.Resource{
+								Schema: map[string]*schema.Schema{
+									"non_current_days": {
+										Type:         schema.TypeInt,
+										Optional:     true,
+										ValidateFunc: validateIntegerMin(0),
+										Description:  "Number of days after non current object creation when the specific rule action takes effect. The maximum value is 3650.",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			"website": {
+				Type:        schema.TypeList,
+				Optional:    true,
+				MaxItems:    1,
+				Description: "A website object(documented below).",
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"index_document": {
+							Type:        schema.TypeString,
+							Required:    true,
+							Description: "COS returns this index document when requests are made to the root domain or any of the subfolders.",
+						},
+						"error_document": {
+							Type:        schema.TypeString,
+							Optional:    true,
+							Description: "An absolute path to the document to return in case of a 4XX error.",
+						},
+						//"endpoint": {
+						//	Type:        schema.TypeString,
+						//	Computed:    true,
+						//	Description: "`Endpoint` of the static website.",
+						//},
+					},
+				},
+			},
+			"tags": {
+				Type:        schema.TypeMap,
+				Optional:    true,
+				Description: "The tags of a bucket.",
+			},
+			// "log_enable": {
+			// 	Type:        schema.TypeBool,
+			// 	Optional:    true,
+			// 	Default:     false,
+			// 	Description: "Indicate the access log of this bucket to be saved or not. Default is `false`. If set `true`, the access log will be saved with `log_target_bucket`. To enable log, the full access of log service must be granted. [Full Access Role Policy](https://intl.cloud.tencent.com/document/product/436/16920).",
+			// },
+			// "log_target_bucket": {
+			// 	Type:        schema.TypeString,
+			// 	Optional:    true,
+			// 	Computed:    true,
+			// 	Description: "The target bucket name which saves the access log of this bucket per 5 minutes. The log access file format is `log_target_bucket`/`log_prefix`{YYYY}/{MM}/{DD}/{time}_{random}_{index}.gz. Only valid when `log_enable` is `true`. User must have full access on this bucket.",
+			// },
+			// "log_prefix": {
+			// 	Type:        schema.TypeString,
+			// 	Optional:    true,
+			// 	Computed:    true,
+			// 	Description: "The prefix log name which saves the access log of this bucket per 5 minutes. Eg. `MyLogPrefix/`. The log access file format is `log_target_bucket`/`log_prefix`{YYYY}/{MM}/{DD}/{time}_{random}_{index}.gz. Only valid when `log_enable` is `true`.",
+			// },
+			//"multi_az": {
+			//	Type:        schema.TypeBool,
+			//	Optional:    true,
+			//	ForceNew:    true,
+			//	Description: "Indicates whether to create a bucket of multi available zone. NOTE: If set to true, the versioning must enable.",
+			//},
+			//computed
+			"cos_bucket_url": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "The URL of this cos bucket.",
+			},
+		},
+	}
+}
+
+func resourceTencentCloudCspBucketCreate(d *schema.ResourceData, meta interface{}) error {
+	defer logElapsed("resource.cloud_csp_bucket.create")()
+
+	var err error
+
+	logId := getLogId(contextNil)
+	ctx := context.WithValue(context.TODO(), logIdKey, logId)
+
+	bucket := d.Get("bucket").(string)
+	acl := d.Get("acl").(string)
+	// role, roleOk := d.GetOk("replica_role")
+	// rule, ruleOk := d.GetOk("replica_rules")
+	versioning := d.Get("versioning_enable").(bool)
+	//isMAZ := d.Get("multi_az").(bool)
+
+	if !versioning {
+		// if roleOk || role.(string) != "" {
+		// 	return fmt.Errorf("cannot configure role unless versioning enable")
+		// } else if ruleOk || len(rule.([]interface{})) > 0 {
+		// 	return fmt.Errorf("cannot configure replica rule unless versioning enable")
+		// }
+		//if isMAZ {
+		//	return fmt.Errorf("cannot create MAZ bucket unless versioning enable")
+		//}
+	}
+
+	cosService := CosService{client: meta.(*TencentCloudClient).apiV3Conn, useCspClient: true}
+
+	useCosService, createOptions := getBucketPutOptions(d)
+
+	if useCosService {
+		err = cosService.TencentCosPutBucket(ctx, bucket, createOptions)
+	} else {
+		err = cosService.PutBucket(ctx, bucket, acl)
+	}
+	if err != nil {
+		return err
+	}
+	if err := WaitCspBucketCreated(ctx, cosService, bucket); err != nil {
+		return err
+	}
+	d.SetId(bucket)
+
+	if tags := helper.GetTags(d, "tags"); len(tags) > 0 {
+		if err := cosService.SetBucketTags(ctx, bucket, tags); err != nil {
+			return err
+		}
+	}
+
+	return resourceTencentCloudCspBucketUpdate(d, meta)
+}
+
+func resourceTencentCloudCspBucketRead(d *schema.ResourceData, meta interface{}) error {
+	defer logElapsed("resource.cloud_csp_bucket.read")()
+	defer inconsistentCheck(d, meta)()
+
+	logId := getLogId(contextNil)
+	ctx := context.WithValue(context.TODO(), logIdKey, logId)
+
+	bucket := d.Id()
+	client := meta.(*TencentCloudClient).apiV3Conn
+	cosService := CosService{client: client, useCspClient: true}
+
+	code, header, err := cosService.TencentcloudHeadBucket(ctx, bucket)
+	if err != nil {
+		if code == 404 {
+			log.Printf("[WARN]%s bucket (%s) not found, error code (404)", logId, bucket)
+			d.SetId("")
+			return nil
+		} else {
+			return err
+		}
+	}
+
+	if header != nil && len(header["X-Cos-Bucket-Az-Type"]) > 0 && header["X-Cos-Bucket-Az-Type"][0] == "MAZ" {
+		_ = d.Set("multi_az", true)
+	}
+
+	cosBucketUrl := fmt.Sprintf("%s.cos.%s.%s", bucket, client.Region, client.CspDomain)
+	_ = d.Set("cos_bucket_url", cosBucketUrl)
+	// set bucket in the import case
+	if _, ok := d.GetOk("bucket"); !ok {
+		_ = d.Set("bucket", d.Id())
+	}
+
+	if err != nil {
+		return err
+	}
+
+	// acl
+	aclResult, err := cosService.GetBucketACL(ctx, bucket)
+
+	if err != nil {
+		return err
+	}
+
+	//aclBody, err := xml.Marshal(aclResult)
+	//
+	//if err != nil {
+	//	log.Printf("[WARN] Marshal XML Error: %s", err.Error())
+	//} else if v, ok := d.Get("acl_body").(string); ok && v != "" {
+	//	_ = d.Set("acl_body", string(aclBody))
+	//}
+
+	acl := GetBucketPublicACL(aclResult)
+
+	_ = d.Set("acl", acl)
+
+	// read the cors
+	corsRules, err := cosService.GetBucketCors(ctx, bucket)
+	if err != nil {
+		return err
+	}
+	if err = d.Set("cors_rules", corsRules); err != nil {
+		return fmt.Errorf("setting cors_rules error: %v", err)
+	}
+	// tce 中不支持该接口
+	//originPullRules, err := cosService.GetBucketPullOrigin(ctx, bucket)
+	//if err != nil {
+	//	return err
+	//}
+	//
+	//if err = d.Set("origin_pull_rules", originPullRules); err != nil {
+	//	return fmt.Errorf("setting origin_pull_rules error: %v", err)
+	//}
+	// tce 中不支持该接口
+	//originDomainRules, err := cosService.GetBucketOriginDomain(ctx, bucket)
+	//if err != nil {
+	//	return err
+	//}
+	//if err = d.Set("origin_domain_rules", originDomainRules); err != nil {
+	//	return fmt.Errorf("setting origin_domain_rules error: %v", err)
+	//}
+
+	// read the lifecycle
+	lifecycleRules, err := cosService.GetBucketLifecycle(ctx, bucket)
+	if err != nil {
+		return err
+	}
+	if err = d.Set("lifecycle_rules", lifecycleRules); err != nil {
+		return fmt.Errorf("setting lifecycle_rules error: %v", err)
+	}
+
+	// read the website
+	website, err := cosService.GetBucketWebsite(ctx, bucket)
+	if err != nil {
+		return err
+	}
+	//if len(website) > 0 {
+	//	// {bucket}.cos-website.{region}.myqcloud.com
+	//	endPointUrl := fmt.Sprintf("%s.csp-website.cos.%s.%s", d.Id(), client.Region, client.CspDomain)
+	//	website[0]["endpoint"] = endPointUrl
+	//}
+	if err = d.Set("website", website); err != nil {
+		return fmt.Errorf("setting website error: %v", err)
+	}
+
+	// read the encryption algorithm
+	encryption, err := cosService.GetBucketEncryption(ctx, bucket)
+	if err != nil {
+		return err
+	}
+	if err = d.Set("encryption_algorithm", encryption); err != nil {
+		return fmt.Errorf("setting encryption error: %v", err)
+	}
+
+	// read the versioning
+	versioning, err := cosService.GetBucketVersioning(ctx, bucket)
+	if err != nil {
+		return err
+	}
+	if err = d.Set("versioning_enable", versioning); err != nil {
+		return fmt.Errorf("setting versioning_enable error: %v", err)
+	}
+
+	// // read the acceleration
+	// acceleration, err := cosService.GetBucketAccleration(ctx, bucket)
+	// if err != nil {
+	// 	return err
+	// }
+	// if err = d.Set("acceleration_enable", acceleration); err != nil {
+	// 	return fmt.Errorf("setting acceleration_enable error: %v", err)
+	// }
+	// tce 中不支持该接口
+	//replicaResult, err := cosService.GetBucketReplication(ctx, bucket)
+	//if err != nil {
+	//	return err
+	//}
+
+	//if replicaResult != nil {
+	//	err := setBucketReplication(d, *replicaResult)
+	//	if err != nil {
+	//		return err
+	//	}
+	//}
+
+	// //read the log
+	// logEnable, logTargetBucket, logPrefix, err := cosService.GetBucketLogStatus(ctx, bucket)
+	// if err != nil {
+	// 	if e, ok := err.(*errors.TencentCloudSDKError); ok {
+	// 		if e.GetCode() != "UnSupportedLoggingRegion" {
+	// 			return err
+	// 		}
+	// 	}
+	// } else {
+	// 	_ = d.Set("log_enable", logEnable)
+	// 	_ = d.Set("log_target_bucket", logTargetBucket)
+	// 	_ = d.Set("log_prefix", logPrefix)
+	// }
+
+	// read the tags
+	tags, err := cosService.GetBucketTags(ctx, bucket)
+	if err != nil {
+		return fmt.Errorf("get tags failed: %v", err)
+	}
+	if len(tags) > 0 {
+		_ = d.Set("tags", tags)
+	}
+
+	return nil
+}
+
+func resourceTencentCloudCspBucketUpdate(d *schema.ResourceData, meta interface{}) error {
+	defer logElapsed("resource.cloud_csp_bucket.update")()
+
+	logId := getLogId(contextNil)
+	ctx := context.WithValue(context.TODO(), logIdKey, logId)
+
+	client := meta.(*TencentCloudClient).apiV3Conn.UseCosS3Client(true)
+	// tcClient := meta.(*TencentCloudClient).apiV3Conn.UseTencentCspClient(d.Id())
+	// cosService := CosService{client: meta.(*TencentCloudClient).apiV3Conn, useCspClient: true}
+
+	d.Partial(true)
+
+	var errs []error
+
+	if d.HasChange("acl") {
+		err := resourceTencentCloudCosBucketAclUpdate(ctx, client, d)
+		if err != nil {
+			errs = append(errs, err)
+		}
+
+	}
+
+	//if d.HasChange("acl_body") {
+	//	body := d.Get("acl_body")
+	//	if err := resourceTencentCloudCosBucketOriginACLBodyUpdate(ctx, cosService, d); err != nil {
+	//		return err
+	//	}
+	//	_ = d.Set("acl_body", body)
+	//}
+
+	if d.HasChange("cors_rules") {
+		err := resourceTencentCloudCspBucketCorsUpdate(ctx, client, d)
+		if err != nil {
+			errs = append(errs, err)
+		}
+
+	}
+
+	//if d.HasChange("origin_pull_rules") {
+	//	rules := d.Get("origin_pull_rules")
+	//	err := resourceTencentCloudCosBucketOriginPullUpdate(ctx, cosService, d)
+	//	if err != nil {
+	//		return err
+	//	}
+	//	_ = d.Set("origin_pull_rules", rules)
+	//}
+	//
+	//if d.HasChange("origin_domain_rules") {
+	//	rules := d.Get("origin_domain_rules")
+	//	if err := resourceTencentCloudCosBucketOriginDomainUpdate(ctx, cosService, d); err != nil {
+	//		return err
+	//	}
+	//	_ = d.Set("origin_domain_rules", rules)
+	//}
+
+	if d.HasChange("lifecycle_rules") {
+		err := resourceTencentCloudCspBucketLifecycleUpdate(ctx, client, d)
+		if err != nil {
+			errs = append(errs, err)
+		}
+
+	}
+
+	if d.HasChange("website") {
+		err := resourceTencentCloudCosBucketWebsiteUpdate(ctx, client, d)
+		if err != nil {
+			errs = append(errs, err)
+		}
+
+	}
+
+	if d.HasChange("encryption_algorithm") {
+		err := resourceTencentCloudCspBucketEncryptionUpdate(ctx, client, d)
+		if err != nil {
+			errs = append(errs, err)
+		}
+
+	}
+
+	if d.HasChange("versioning_enable") {
+		err := resourceTencentCloudCspBucketVersioningUpdate(ctx, client, d)
+		if err != nil {
+			errs = append(errs, err)
+		}
+
+	}
+
+	// if d.HasChange("acceleration_enable") {
+	// 	err := resourceTencentCloudCspBucketAccelerationUpdate(ctx, tcClient, d)
+	// 	if err != nil {
+	// 		return err
+	// 	}
+
+	// }
+
+	// if d.HasChange("replica_role") || d.HasChange("replica_rules") {
+	// 	err := resourceTencentCloudCspBucketReplicaUpdate(ctx, cosService, d)
+
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	// }
+
+	if d.HasChange("tags") {
+		bucket := d.Id()
+
+		cosService := CosService{client: meta.(*TencentCloudClient).apiV3Conn, useCspClient: true}
+		if err := cosService.SetBucketTags(ctx, bucket, helper.GetTags(d, "tags")); err != nil {
+			errs = append(errs, err)
+		}
+
+	}
+
+	// if d.HasChange("log_enable") || d.HasChange("log_target_bucket") || d.HasChange("log_prefix") {
+	// 	err := resourceTencentCloudCspBucketLogStatusUpdate(ctx, client, d)
+	// 	if err != nil {
+	// 		return err
+	// 	}
+
+	// }
+
+	d.Partial(false)
+
+	if len(errs) > 0 {
+		var totalErr error
+		for _, err := range errs {
+			totalErr = fmt.Errorf("%v; %w", totalErr, err)
+		}
+		return totalErr
+	}
+
+	// wait for update cache
+	// if not, the data may be outdated.
+	time.Sleep(3 * time.Second)
+
+	return resourceTencentCloudCspBucketRead(d, meta)
+}
+
+func resourceTencentCloudCspBucketDelete(d *schema.ResourceData, meta interface{}) error {
+	defer logElapsed("resource.cloud_csp_bucket.delete")()
+
+	logId := getLogId(contextNil)
+	ctx := context.WithValue(context.TODO(), logIdKey, logId)
+
+	bucket := d.Id()
+	// forced := d.Get("force_clean").(bool)
+	forced := false
+	versioned := d.Get("versioning_enable").(bool)
+	cosService := CosService{
+		client: meta.(*TencentCloudClient).apiV3Conn, useCspClient: true,
+	}
+	err := cosService.DeleteBucket(ctx, bucket, forced, versioned)
+	if err != nil {
+		return err
+	}
+
+	// wait for update cache
+	// if not, head bucket may be successful
+	time.Sleep(3 * time.Second)
+
+	return nil
+}
+
+func resourceTencentCloudCspBucketEncryptionUpdate(ctx context.Context, client *s3.S3, d *schema.ResourceData) error {
+	logId := getLogId(ctx)
+
+	bucket := d.Get("bucket").(string)
+	encryption := d.Get("encryption_algorithm").(string)
+	if encryption == "" {
+		request := s3.DeleteBucketEncryptionInput{
+			Bucket: aws.String(bucket),
+		}
+		response, err := client.DeleteBucketEncryption(&request)
+		if err != nil {
+			log.Printf("[CRITAL]%s api[%s] fail, request body [%s], reason[%s]\n",
+				logId, "delete bucket encryption", request.String(), err.Error())
+			return fmt.Errorf("cos delete bucket error: %s, bucket: %s", err.Error(), bucket)
+		}
+		log.Printf("[DEBUG]%s api[%s] success, request body [%s], response body [%s]\n",
+			logId, "delete bucket encryption", request.String(), response.String())
+
+		return nil
+	}
+
+	request := s3.PutBucketEncryptionInput{
+		Bucket: aws.String(bucket),
+	}
+	request.ServerSideEncryptionConfiguration = &s3.ServerSideEncryptionConfiguration{}
+	rules := make([]*s3.ServerSideEncryptionRule, 0)
+	defaultRule := &s3.ServerSideEncryptionByDefault{
+		SSEAlgorithm: aws.String(encryption),
+	}
+	rule := &s3.ServerSideEncryptionRule{
+		ApplyServerSideEncryptionByDefault: defaultRule,
+	}
+	rules = append(rules, rule)
+	request.ServerSideEncryptionConfiguration.Rules = rules
+
+	response, err := client.PutBucketEncryption(&request)
+	if err != nil {
+		log.Printf("[CRITAL]%s api[%s] fail, request body [%s], reason[%s]\n",
+			logId, "put bucket encryption", request.String(), err.Error())
+		return fmt.Errorf("cos put bucket encryption error: %s, bucket: %s", err.Error(), bucket)
+	}
+	log.Printf("[DEBUG]%s api[%s] success, request body [%s], response body [%s]\n",
+		logId, "put bucket encryption", request.String(), response.String())
+
+	return nil
+}
+
+func resourceTencentCloudCspBucketVersioningUpdate(ctx context.Context, client *s3.S3, d *schema.ResourceData) error {
+	logId := getLogId(ctx)
+
+	bucket := d.Get("bucket").(string)
+	versioning := d.Get("versioning_enable").(bool)
+	status := "Suspended"
+	if versioning {
+		status = "Enabled"
+	}
+	request := s3.PutBucketVersioningInput{
+		Bucket: aws.String(bucket),
+		VersioningConfiguration: &s3.VersioningConfiguration{
+			Status: aws.String(status),
+		},
+	}
+	response, err := client.PutBucketVersioning(&request)
+	if err != nil {
+		log.Printf("[CRITAL]%s api[%s] fail, request body [%s], reason[%s]\n",
+			logId, "put bucket encryption", request.String(), err.Error())
+		return fmt.Errorf("cos put bucket encryption error: %s, bucket: %s", err.Error(), bucket)
+	}
+	log.Printf("[DEBUG]%s api[%s] success, request body [%s], response body [%s]\n",
+		logId, "put bucket encryption", request.String(), response.String())
+
+	return nil
+}
+
+func resourceTencentCloudCspBucketAccelerationUpdate(ctx context.Context, client *cos.Client, d *schema.ResourceData) error {
+	// 	logId := getLogId(ctx)
+
+	// 	bucket := d.Get("bucket").(string)
+	// 	enabled := d.Get("acceleration_enable").(bool)
+	// 	status := "Suspended"
+	// 	if enabled {
+	// 		status = "Enabled"
+	// 	}
+
+	// 	opt := &cos.BucketPutAccelerateOptions{
+	// 		Status: status,
+	// 	}
+	// 	response, err := client.Bucket.PutAccelerate(ctx, opt)
+	// 	if err != nil {
+	// 		log.Printf("[CRITAL]%s api[%s] fail, status [%s], reason[%s]\n",
+	// 			logId, "put bucket acceleration", opt.Status, err.Error())
+	// 		return fmt.Errorf("cos put bucket acceleration error: %s, bucket: %s", err.Error(), bucket)
+	// 	}
+	// 	rb, _ := ioutil.ReadAll(response.Body)
+	// 	body, _ := json.Marshal(rb)
+	// 	log.Printf("[DEBUG]%s api[%s] success, status [%s], response body [%s]\n",
+	// 		logId, "put bucket acceleration", opt.Status, string(body))
+
+	// 	return err
+
+	return nil
+}
+
+func resourceTencentCloudCspBucketReplicaUpdate(ctx context.Context, service CosService, d *schema.ResourceData) error {
+	// bucket := d.Get("bucket").(string)
+	// oldRole, newRole := d.GetChange("replica_role")
+	// oldRules, newRules := d.GetChange("replica_rules")
+	// oldRuleLength := len(oldRules.([]interface{}))
+	// newRuleLength := len(newRules.([]interface{}))
+
+	// // check if remove
+	// if oldRole.(string) != "" && newRole.(string) == "" || oldRuleLength > 0 && newRuleLength == 0 {
+	// 	result, err := service.GetBucketReplication(ctx, bucket)
+	// 	if err != nil {
+	// 		return err
+	// 	}
+
+	// 	if result != nil {
+	// 		err := service.DeleteBucketReplication(ctx, d.Get("bucket").(string))
+	// 		if err != nil {
+	// 			return err
+	// 		}
+	// 	}
+	// } else if newRole.(string) != "" || newRuleLength > 0 {
+	// 	role, rules, _ := getBucketReplications(d)
+	// 	err := service.PutBucketReplication(ctx, d.Get("bucket").(string), role, rules)
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	// }
+
+	return nil
+}
+
+func resourceTencentCloudCspBucketAclUpdate(ctx context.Context, client *s3.S3, d *schema.ResourceData) error {
+	logId := getLogId(ctx)
+
+	bucket := d.Get("bucket").(string)
+	acl := d.Get("acl").(string)
+	request := s3.PutBucketAclInput{
+		Bucket: aws.String(bucket),
+		ACL:    aws.String(acl),
+	}
+	response, err := client.PutBucketAcl(&request)
+	if err != nil {
+		log.Printf("[CRITAL]%s api[%s] fail, request body [%s], reason[%s]\n",
+			logId, "put bucket acl", request.String(), err.Error())
+		return fmt.Errorf("cos put bucket error: %s, bucket: %s", err.Error(), bucket)
+	}
+	log.Printf("[DEBUG]%s api[%s] success, request body [%s], response body [%s]\n",
+		logId, "put bucket acl", request.String(), response.String())
+
+	return nil
+}
+
+func resourceTencentCloudCspBucketCorsUpdate(ctx context.Context, client *s3.S3, d *schema.ResourceData) error {
+	logId := getLogId(ctx)
+
+	bucket := d.Get("bucket").(string)
+	cors := d.Get("cors_rules").([]interface{})
+
+	if len(cors) == 0 {
+		request := s3.DeleteBucketCorsInput{
+			Bucket: aws.String(bucket),
+		}
+		response, err := client.DeleteBucketCors(&request)
+		if err != nil {
+			log.Printf("[CRITAL]%s api[%s] fail, request body [%s], reason[%s]\n",
+				logId, "delete bucket cors", request.String(), err.Error())
+			return fmt.Errorf("cos delete bucket cors error: %s, bucket: %s", err.Error(), bucket)
+		}
+		log.Printf("[DEBUG]%s api[%s] success, request body [%s], response body [%s]\n",
+			logId, "delete bucket cors", request.String(), response.String())
+	} else {
+		rules := make([]*s3.CORSRule, 0, len(cors))
+		for _, item := range cors {
+			corsMap := item.(map[string]interface{})
+			rule := &s3.CORSRule{}
+			for k, v := range corsMap {
+				if k == "max_age_seconds" {
+					rule.MaxAgeSeconds = aws.Int64(int64(v.(int)))
+				} else {
+					vMap := make([]*string, len(v.([]interface{})))
+					for i, value := range v.([]interface{}) {
+						if str, ok := value.(string); ok {
+							vMap[i] = aws.String(str)
+						}
+					}
+					switch k {
+					case "allowed_origins":
+						rule.AllowedOrigins = vMap
+					case "allowed_methods":
+						rule.AllowedMethods = vMap
+					case "allowed_headers":
+						rule.AllowedHeaders = vMap
+					case "expose_headers":
+						rule.ExposeHeaders = vMap
+					}
+				}
+			}
+			rules = append(rules, rule)
+		}
+		request := s3.PutBucketCorsInput{
+			Bucket: aws.String(bucket),
+			CORSConfiguration: &s3.CORSConfiguration{
+				CORSRules: rules,
+			},
+		}
+		response, err := client.PutBucketCors(&request)
+		if err != nil {
+			log.Printf("[CRITAL]%s api[%s] fail, request body [%s], reason[%s]\n",
+				logId, "put bucket cors", request.String(), err.Error())
+			return fmt.Errorf("cos put bucket cors error: %s, bucket: %s", err.Error(), bucket)
+		}
+		log.Printf("[DEBUG]%s api[%s] success, request body [%s], response body [%s]\n",
+			logId, "put bucket cors", request.String(), response.String())
+	}
+	return nil
+}
+
+func resourceTencentCloudCspBucketLifecycleUpdate(ctx context.Context, client *s3.S3, d *schema.ResourceData) error {
+	logId := getLogId(ctx)
+
+	bucket := d.Get("bucket").(string)
+	lifecycleRules := d.Get("lifecycle_rules").([]interface{})
+	if len(lifecycleRules) == 0 {
+		request := s3.DeleteBucketLifecycleInput{
+			Bucket: aws.String(bucket),
+		}
+		response, err := client.DeleteBucketLifecycle(&request)
+		if err != nil {
+			log.Printf("[CRITAL]%s api[%s] fail, request body [%s], reason[%s]\n",
+				logId, "delete bucket lifecycle", request.String(), err.Error())
+			return fmt.Errorf("cos delete bucket lifecycle error: %s, bucket: %s", err.Error(), bucket)
+		}
+		log.Printf("[DEBUG]%s api[%s] success, request body [%s], response body [%s]\n",
+			logId, "delete bucket lifecycle", request.String(), response.String())
+	} else {
+		rules := make([]*s3.LifecycleRule, 0, len(lifecycleRules))
+		for i, lifecycleRule := range lifecycleRules {
+			r := lifecycleRule.(map[string]interface{})
+			rule := &s3.LifecycleRule{}
+			id, ok := r["id"].(string)
+			if ok {
+				rule.ID = &id
+			}
+			rule.Status = helper.String(s3.ExpirationStatusEnabled)
+			prefix := r["filter_prefix"].(string)
+			rule.Filter = &s3.LifecycleRuleFilter{
+				Prefix: &prefix,
+			}
+
+			// Transitions
+			//transitions := d.Get(fmt.Sprintf("lifecycle_rules.%d.transition", i)).(*schema.Set).List()
+			//if len(transitions) > 0 {
+			//	rule.Transitions = make([]*s3.Transition, 0, len(transitions))
+			//	for _, transition := range transitions {
+			//		transitionValue := transition.(map[string]interface{})
+			//		t := &s3.Transition{}
+			//		//if val, ok := transitionValue["date"].(string); ok && val != "" {
+			//		//	date, err := time.Parse(time.RFC3339, fmt.Sprintf("%sT00:00:00Z", val))
+			//		//	if err != nil {
+			//		//		return fmt.Errorf("parsing cos bucket lifecycle transition date(%s) error: %s", val, err.Error())
+			//		//	}
+			//		//	t.Date = aws.Time(date)
+			//		//} else
+			//		if val, ok := transitionValue["days"].(int); ok && val >= 0 {
+			//			t.Days = aws.Int64(int64(val))
+			//		}
+			//		if val, ok := transitionValue["storage_class"].(string); ok && val != "" {
+			//			t.StorageClass = aws.String(val)
+			//		}
+			//
+			//		rule.Transitions = append(rule.Transitions, t)
+			//	}
+			//}
+
+			// Expiration
+			expirations := d.Get(fmt.Sprintf("lifecycle_rules.%d.expiration", i)).(*schema.Set).List()
+			if len(expirations) > 0 {
+				expiration := expirations[0].(map[string]interface{})
+				e := &s3.LifecycleExpiration{}
+
+				//if val, ok := expiration["date"].(string); ok && val != "" {
+				//	date, err := time.Parse(time.RFC3339, fmt.Sprintf("%sT00:00:00Z", val))
+				//	if err != nil {
+				//		return fmt.Errorf("parsing cos bucket lifecycle expiration data(%s) error: %s", val, err.Error())
+				//	}
+				//	e.Date = aws.Time(date)
+				//} else
+				if val, ok := expiration["days"].(int); ok && val > 0 {
+					e.Days = aws.Int64(int64(val))
+				}
+
+				if val, ok := expiration["delete_marker"].(bool); ok && val {
+					e.ExpiredObjectDeleteMarker = helper.Bool(true)
+				}
+
+				rule.Expiration = e
+			}
+
+			// Non Current Transitions
+			//nonCurrentTransitions := d.Get(fmt.Sprintf("lifecycle_rules.%d.non_current_transition", i)).(*schema.Set).List()
+			//if len(nonCurrentTransitions) > 0 {
+			//	rule.NoncurrentVersionTransitions = make([]*s3.NoncurrentVersionTransition, 0, len(transitions))
+			//	for _, transition := range nonCurrentTransitions {
+			//		transitionValue := transition.(map[string]interface{})
+			//		t := &s3.NoncurrentVersionTransition{}
+			//		if val, ok := transitionValue["non_current_days"].(int); ok && val >= 0 {
+			//			t.NoncurrentDays = aws.Int64(int64(val))
+			//		}
+			//		if val, ok := transitionValue["storage_class"].(string); ok && val != "" {
+			//			t.StorageClass = aws.String(val)
+			//		}
+			//
+			//		rule.NoncurrentVersionTransitions = append(rule.NoncurrentVersionTransitions, t)
+			//	}
+			//}
+
+			// Non Current Expiration
+			nonCurrentExpirations := d.Get(fmt.Sprintf("lifecycle_rules.%d.non_current_expiration", i)).(*schema.Set).List()
+			if len(nonCurrentExpirations) > 0 {
+				nonCurrentExpiration := nonCurrentExpirations[0].(map[string]interface{})
+				e := &s3.NoncurrentVersionExpiration{}
+
+				if val, ok := nonCurrentExpiration["non_current_days"].(int); ok && val > 0 {
+					e.NoncurrentDays = aws.Int64(int64(val))
+				}
+
+				rule.NoncurrentVersionExpiration = e
+			}
+			rules = append(rules, rule)
+		}
+
+		request := s3.PutBucketLifecycleConfigurationInput{
+			Bucket: aws.String(bucket),
+			LifecycleConfiguration: &s3.BucketLifecycleConfiguration{
+				Rules: rules,
+			},
+		}
+		response, err := client.PutBucketLifecycleConfiguration(&request)
+		if err != nil {
+			log.Printf("[CRITAL]%s api[%s] fail, request body [%s], reason[%s]\n",
+				logId, "put bucket lifecycle", request.String(), err.Error())
+			return fmt.Errorf("cos put bucket lifecycle error: %s, bucket: %s", err.Error(), bucket)
+		}
+		log.Printf("[DEBUG]%s api[%s] success, request body [%s], response body [%s]\n",
+			logId, "put bucket lifecycle", request.String(), response.String())
+	}
+
+	return nil
+}
+
+func resourceTencentCloudCspBucketWebsiteUpdate(ctx context.Context, client *s3.S3, d *schema.ResourceData) error {
+	logId := getLogId(ctx)
+
+	bucket := d.Get("bucket").(string)
+	website := d.Get("website").([]interface{})
+
+	if len(website) == 0 {
+		request := s3.DeleteBucketWebsiteInput{
+			Bucket: aws.String(bucket),
+		}
+		response, err := client.DeleteBucketWebsite(&request)
+		if err != nil {
+			log.Printf("[CRITAL]%s api[%s] fail, request body [%s], reason[%s]\n",
+				logId, "delete bucket website", request.String(), err.Error())
+			return fmt.Errorf("cos delete bucket website error: %s, bucket: %s", err.Error(), bucket)
+		}
+		log.Printf("[DEBUG]%s api[%s] success, request body [%s], response body [%s]\n",
+			logId, "delete bucket website", request.String(), response.String())
+	} else {
+		var w map[string]interface{}
+		if website[0] != nil {
+			w = website[0].(map[string]interface{})
+		} else {
+			w = make(map[string]interface{})
+		}
+		var indexDocument, errorDocument string
+		if v, ok := w["index_document"]; ok {
+			indexDocument = v.(string)
+		}
+		if v, ok := w["error_document"]; ok {
+			errorDocument = v.(string)
+		}
+		request := s3.PutBucketWebsiteInput{
+			Bucket: aws.String(bucket),
+			WebsiteConfiguration: &s3.WebsiteConfiguration{
+				IndexDocument: &s3.IndexDocument{
+					Suffix: aws.String(indexDocument),
+				},
+				ErrorDocument: &s3.ErrorDocument{
+					Key: aws.String(errorDocument),
+				},
+			},
+		}
+		response, err := client.PutBucketWebsite(&request)
+		if err != nil {
+			log.Printf("[CRITAL]%s api[%s] fail, request body [%s], reason[%s]\n",
+				logId, "put bucket website", request.String(), err.Error())
+			return fmt.Errorf("cos put bucket website error: %s, bucket: %s", err.Error(), bucket)
+		}
+		log.Printf("[DEBUG]%s api[%s] success, request body [%s], response body [%s]\n",
+			logId, "put bucket website", request.String(), response.String())
+	}
+
+	return nil
+}
+
+func resourceTencentCloudCspBucketLogStatusUpdate(ctx context.Context, client *s3.S3, d *schema.ResourceData) error {
+	// logId := getLogId(ctx)
+
+	// bucket := d.Id()
+
+	// logSwitch := d.Get("log_enable").(bool)
+	// if logSwitch {
+	// 	if d.HasChange("log_target_bucket") || d.HasChange("log_prefix") {
+	// 		targetBucket := d.Get("log_target_bucket").(string)
+	// 		logPrefix := d.Get("log_prefix").(string)
+	// 		//check
+	// 		if targetBucket == "" || logPrefix == "" {
+	// 			return fmt.Errorf("log_target_bucket and log_prefix should set valid value when log_enable is true")
+	// 		}
+
+	// 		//set log target bucket and prefix
+	// 		//grant are solved by the cloud_cam_role_attachment resource
+	// 		request := &s3.PutBucketLoggingInput{
+	// 			Bucket: aws.String(bucket),
+	// 			BucketLoggingStatus: &s3.BucketLoggingStatus{
+	// 				LoggingEnabled: &s3.LoggingEnabled{
+	// 					TargetBucket: aws.String(targetBucket),
+	// 					TargetPrefix: aws.String(logPrefix),
+	// 				},
+	// 			},
+	// 		}
+
+	// 		resp, err := client.PutBucketLogging(request)
+	// 		if err != nil {
+	// 			log.Printf("[CRITAL]%s api[%s] fail, request body [%s], reason[%s]\n",
+	// 				logId, "cos enable log error", request.String(), err.Error())
+	// 			return fmt.Errorf("cos enable log error: %s, bucket: %s", err.Error(), bucket)
+	// 		}
+	// 		log.Printf("[DEBUG]%s api[%s] success, request body [%s], resp[%s]\n",
+	// 			logId, "cos enable log success", request.String(), resp.String())
+	// 	}
+	// } else {
+	// 	targetBucket := d.Get("log_target_bucket").(string)
+	// 	logPrefix := d.Get("log_prefix").(string)
+	// 	//check
+	// 	if targetBucket != "" || logPrefix != "" {
+	// 		return fmt.Errorf("log_target_bucket and log_prefix should set null when log_enable is false")
+	// 	}
+	// 	// set disabled, put empty request
+	// 	request := &s3.PutBucketLoggingInput{
+	// 		Bucket:              aws.String(bucket),
+	// 		BucketLoggingStatus: &s3.BucketLoggingStatus{},
+	// 	}
+
+	// 	resp, err := client.PutBucketLogging(request)
+	// 	if err != nil {
+	// 		return fmt.Errorf("cos disable log error: %s, bucket: %s", err.Error(), bucket)
+	// 	}
+
+	// 	log.Printf("[DEBUG]%s api[%s] success, request body [%s], resp[%s]\n",
+	// 		logId, "cos enable log success", request.String(), resp.String())
+	// }
+
+	return nil
+}
+
+func resourceTencentCloudCspBucketOriginACLBodyUpdate(ctx context.Context, service CosService, d *schema.ResourceData) error {
+	aclHeader := ""
+	aclBody := ""
+	body, bodyOk := d.GetOk("acl_body")
+	header, headerOk := d.GetOk("acl")
+	bucket := d.Get("bucket").(string)
+	// If ACLXML update to empty, this will pass default header to delete verbose acl info
+	if bodyOk {
+		aclBody = body.(string)
+	} else if headerOk {
+		aclHeader = header.(string)
+	} else {
+		aclHeader = "private"
+	}
+	if err := service.TencentCosPutBucketACL(ctx, bucket, aclBody, aclHeader); err != nil {
+		return err
+	}
+	return nil
+}
+
+func resourceTencentCloudCspBucketOriginPullUpdate(ctx context.Context, service CosService, d *schema.ResourceData) error {
+	var rules []cos.BucketOriginRule
+	v, ok := d.GetOk("origin_pull_rules")
+	bucket := d.Get("bucket").(string)
+	if !ok {
+		if err := service.DeleteBucketPullOrigin(ctx, bucket); err != nil {
+			return err
+		}
+		return nil
+	}
+	rulesRaw := v.([]interface{})
+	for _, i := range rulesRaw {
+		var (
+			dMap = i.(map[string]interface{})
+			item = &cos.BucketOriginRule{
+				OriginCondition: &cos.BucketOriginCondition{
+					HTTPStatusCode: "404",
+				},
+				OriginParameter: &cos.BucketOriginParameter{
+					CopyOriginData: true,
+					HttpHeader:     &cos.BucketOriginHttpHeader{},
+				},
+				OriginInfo: &cos.BucketOriginInfo{
+					FileInfo: &cos.BucketOriginFileInfo{
+						// PrefixDirective: false,
+					},
+				},
+			}
+		)
+
+		if v := dMap["sync_back_to_source"]; v.(bool) {
+			item.OriginType = "Mirror"
+		} else {
+			item.OriginType = "Proxy"
+		}
+
+		if v, ok := dMap["priority"]; ok {
+			item.RulePriority = v.(int)
+		}
+		if v, ok := dMap["prefix"]; ok {
+			item.OriginCondition.Prefix = v.(string)
+		}
+		if v, ok := dMap["protocol"]; ok {
+			item.OriginParameter.Protocol = v.(string)
+		}
+		// if v, ok := dMap["host"]; ok {
+		// item.OriginInfo.HostInfo = v.(string)
+		// }
+		if v, ok := dMap["follow_query_string"]; ok {
+			item.OriginParameter.FollowQueryString = v.(bool)
+		}
+		if v, ok := dMap["follow_redirection"]; ok {
+			item.OriginParameter.FollowRedirection = v.(bool)
+		}
+		//if v, ok := dMap["copy_origin_data"]; ok {
+		//	item.OriginParameter.CopyOriginData = v.(bool)
+		//}
+		if v, ok := dMap["redirect_prefix"]; ok {
+			value := v.(string)
+			if value != "" {
+				// item.OriginInfo.FileInfo.PrefixDirective = true
+			}
+			// item.OriginInfo.FileInfo.Prefix = value
+		}
+		if v, ok := dMap["redirect_suffix"]; ok {
+			value := v.(string)
+			if value != "" {
+				// item.OriginInfo.FileInfo.PrefixDirective = true
+			}
+			// item.OriginInfo.FileInfo.Suffix = value
+		}
+		if v, ok := dMap["custom_http_headers"]; ok {
+			var customHeaders []cos.OriginHttpHeader
+			for key, val := range v.(map[string]interface{}) {
+				customHeaders = append(customHeaders, cos.OriginHttpHeader{
+					Key:   key,
+					Value: val.(string),
+				})
+			}
+			item.OriginParameter.HttpHeader.NewHttpHeaders = customHeaders
+		}
+		if v, ok := dMap["follow_http_headers"]; ok {
+			var followHeaders []cos.OriginHttpHeader
+			for _, item := range v.(*schema.Set).List() {
+				header := cos.OriginHttpHeader{
+					Key:   item.(string),
+					Value: "",
+				}
+				followHeaders = append(followHeaders, header)
+			}
+			item.OriginParameter.HttpHeader.FollowHttpHeaders = followHeaders
+		}
+		rules = append(rules, *item)
+	}
+
+	if err := service.PutBucketPullOrigin(ctx, bucket, rules); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func resourceTencentCloudCspBucketOriginDomainUpdate(ctx context.Context, service CosService, d *schema.ResourceData) error {
+	v, ok := d.GetOk("origin_domain_rules")
+	bucket := d.Get("bucket").(string)
+	if !ok {
+		if err := service.DeleteBucketOriginDomain(ctx, bucket); err != nil {
+			return err
+		}
+		return nil
+	}
+	rules := v.([]interface{})
+	domainRules := make([]cos.BucketDomainRule, 0)
+
+	for _, rule := range rules {
+		dMap := rule.(map[string]interface{})
+		item := cos.BucketDomainRule{}
+		if name, ok := dMap["domain"]; ok {
+			item.Name = name.(string)
+		}
+		if status, ok := dMap["status"]; ok {
+			item.Status = status.(string)
+		}
+		if domainType, ok := dMap["type"]; ok {
+			item.Type = domainType.(string)
+		}
+		domainRules = append(domainRules, item)
+	}
+
+	if err := service.PutBucketOriginDomain(ctx, bucket, domainRules); err != nil {
+		return err
+	}
+	return nil
+}
+
+//func getBucketPutOptions(d *schema.ResourceData) (useCosService bool, options *cos.BucketPutOptions) {
+//	opt := &cos.BucketPutOptions{
+//		XCosACL:              d.Get("acl").(string),
+//		XCosGrantRead:        "",
+//		XCosGrantWrite:       "",
+//		XCosGrantReadACP:     "",
+//		XCosGrantWriteACP:    "",
+//		XCosGrantFullControl: "",
+//	}
+//	grants, hasGrantHeaders := d.GetOk("grant_headers")
+//	maz, hasMAZ := d.GetOk("multi_az")
+//
+//	if !hasGrantHeaders && !hasMAZ {
+//		return false, opt
+//	}
+//
+//	if hasGrantHeaders {
+//		headers := grants.(map[string]interface{})
+//		if v, ok := headers["grant_read"]; ok {
+//			opt.XCosGrantRead = v.(string)
+//		}
+//		if v, ok := headers["grant_write"]; ok {
+//			opt.XCosGrantWrite = v.(string)
+//		}
+//		if v, ok := headers["grant_read_acp"]; ok {
+//			opt.XCosGrantReadACP = v.(string)
+//		}
+//		if v, ok := headers["grant_write_acp"]; ok {
+//			opt.XCosGrantWriteACP = v.(string)
+//		}
+//		if v, ok := headers["grant_full_control"]; ok {
+//			opt.XCosGrantFullControl = v.(string)
+//		}
+//	}
+//
+//	if hasMAZ {
+//		if maz.(bool) {
+//			opt.CreateBucketConfiguration = &cos.CreateBucketConfiguration{
+//				BucketAZConfig: "MAZ",
+//			}
+//		}
+//	}
+//
+//	return true, opt
+//}
+//
+//func expirationHash(v interface{}) int {
+//	var buf bytes.Buffer
+//	m := v.(map[string]interface{})
+//	if v, ok := m["date"]; ok {
+//		buf.WriteString(fmt.Sprintf("%s-", v.(string)))
+//	}
+//	if v, ok := m["days"]; ok {
+//		buf.WriteString(fmt.Sprintf("%d-", v.(int)))
+//	}
+//	return helper.HashString(buf.String())
+//}
+//
+//func nonCurrentExpirationHash(v interface{}) int {
+//	var buf bytes.Buffer
+//	m := v.(map[string]interface{})
+//	if v, ok := m["non_current_days"]; ok {
+//		buf.WriteString(fmt.Sprintf("%d-", v.(int)))
+//	}
+//	return helper.HashString(buf.String())
+//}
+//
+//func transitionHash(v interface{}) int {
+//	var buf bytes.Buffer
+//	m := v.(map[string]interface{})
+//	if v, ok := m["date"]; ok {
+//		buf.WriteString(fmt.Sprintf("%s-", v.(string)))
+//	}
+//	if v, ok := m["days"]; ok {
+//		buf.WriteString(fmt.Sprintf("%d-", v.(int)))
+//	}
+//	if v, ok := m["storage_class"]; ok {
+//		buf.WriteString(fmt.Sprintf("%s-", v.(string)))
+//	}
+//	return helper.HashString(buf.String())
+//}
+//
+//func nonCurrentTransitionHash(v interface{}) int {
+//	var buf bytes.Buffer
+//	m := v.(map[string]interface{})
+//	if v, ok := m["non_current_days"]; ok {
+//		buf.WriteString(fmt.Sprintf("%d-", v.(int)))
+//	}
+//	if v, ok := m["storage_class"]; ok {
+//		buf.WriteString(fmt.Sprintf("%s-", v.(string)))
+//	}
+//	return helper.HashString(buf.String())
+//}
+//
+//func getBucketReplications(d *schema.ResourceData) (role string, rules []cos.BucketReplicationRule, err error) {
+//	role = d.Get("replica_role").(string)
+//	replicaRules := d.Get("replica_rules").([]interface{})
+//	for i := range replicaRules {
+//		item := replicaRules[i].(map[string]interface{})
+//		rule := cos.BucketReplicationRule{
+//			Status: item["status"].(string),
+//			Destination: &cos.ReplicationDestination{
+//				Bucket: item["destination_bucket"].(string),
+//			},
+//		}
+//		if v, ok := item["prefix"].(string); ok {
+//			rule.Prefix = v
+//		}
+//		if v, ok := item["id"].(string); ok {
+//			rule.ID = v
+//		}
+//		if v, ok := item["destination_storage_class"].(string); ok {
+//			rule.Destination.StorageClass = v
+//		}
+//		rules = append(rules, rule)
+//	}
+//	return
+//}
+//
+//func setBucketReplication(d *schema.ResourceData, result cos.GetBucketReplicationResult) (err error) {
+//	if result.Role != "" {
+//		_ = d.Set("replica_role", result.Role)
+//	}
+//	rules := make([]map[string]interface{}, 0)
+//	if len(result.Rule) > 0 {
+//		for i := range result.Rule {
+//			item := result.Rule[i]
+//			rule := map[string]interface{}{
+//				"status":                    item.Status,
+//				"destination_bucket":        item.Destination.Bucket,
+//				"destination_storage_class": item.Destination.StorageClass,
+//			}
+//			if item.ID != "" {
+//				rule["id"] = item.ID
+//			}
+//			if item.Prefix != "" {
+//				rule["prefix"] = item.Prefix
+//			}
+//			rules = append(rules, rule)
+//		}
+//	}
+//	err = d.Set("replica_rules", rules)
+//	return
+//}
+
+// WaitCspBucketCreated wait bucket created
+func WaitCspBucketCreated(ctx context.Context, service CosService, bucket string) error {
+	// optimize: to use github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry
+	logId := getLogId(ctx)
+
+	for i := 0; i < 10; i++ {
+		code, _, err := service.TencentcloudHeadBucket(ctx, bucket)
+		if err != nil {
+			if code == 404 {
+				log.Printf("[WARN]%s wait created bucket (%s) not found, error code (404)", logId, bucket)
+			}
+			time.Sleep(5 * time.Second)
+			log.Printf("[ERROR]%s wait created bucket (%s) error: %s", logId, bucket, err.Error())
+		} else {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("csp wait created bucket timeout: %s ", bucket)
+}

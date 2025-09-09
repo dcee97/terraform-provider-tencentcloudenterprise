@@ -1,0 +1,217 @@
+/*
+Use this data source to query eip instances.
+
+# Example Usage
+
+```hcl
+
+	data "cloud_eips" "foo" {
+	  eip_id = "eip-ry9h95hg"
+	}
+
+```
+*/
+package tencentcloud
+
+import (
+	"context"
+	"log"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	vpc "terraform-provider-tencentcloudenterprise/sdk/vpc/v20170312"
+	"terraform-provider-tencentcloudenterprise/tencentcloud/internal/helper"
+)
+
+func init() {
+	registerDataDescriptionProvider("cloud_eips", CNDescription{
+		TerraformTypeCN: "弹性IP",
+		AttributesCN: map[string]string{
+			"eip_id":             "要查询的EIP的ID",
+			"eip_name":           "要查询的EIP的名称",
+			"public_ip":          "弹性ip地址",
+			"tags":               "EIP的标签",
+			"result_output_file": "用于保存结果",
+			"eip_list":           "EIP的信息列表",
+			"status":             "EIP当前状态",
+			"instance_id":        "要与EIP绑定的实例id",
+			"eni_id":             "要与EIP绑定的eni id",
+			"create_time":        "EIP的创建时间",
+		},
+	})
+}
+
+func dataSourceTencentCloudEips() *schema.Resource {
+	return &schema.Resource{
+		Description: "Use this data source to query eip instances.",
+		Read:        dataSourceTencentCloudEipsRead,
+
+		Schema: map[string]*schema.Schema{
+			"eip_id": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "ID of the EIP to be queried.",
+			},
+			"eip_name": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "Name of the EIP to be queried.",
+			},
+			"public_ip": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "The elastic ip address.",
+			},
+			"tags": {
+				Type:        schema.TypeMap,
+				Optional:    true,
+				Description: "The tags of EIP.",
+			},
+			"result_output_file": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "Used to save results.",
+			},
+
+			"eip_list": {
+				Type:        schema.TypeList,
+				Computed:    true,
+				Description: "An information list of EIP. Each element contains the following attributes:",
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"eip_id": {
+							Type:        schema.TypeString,
+							Computed:    true,
+							Description: "ID of the EIP.",
+						},
+						"eip_name": {
+							Type:        schema.TypeString,
+							Computed:    true,
+							Description: "Name of the EIP.",
+						},
+						"eip_type": {
+							Type:        schema.TypeString,
+							Computed:    true,
+							Description: "Type of the EIP.",
+						},
+						"status": {
+							Type:        schema.TypeString,
+							Computed:    true,
+							Description: "The EIP current status.",
+						},
+						"public_ip": {
+							Type:        schema.TypeString,
+							Computed:    true,
+							Description: "The elastic ip address.",
+						},
+						"instance_id": {
+							Type:        schema.TypeString,
+							Computed:    true,
+							Description: "The instance id to bind with the EIP.",
+						},
+						"eni_id": {
+							Type:        schema.TypeString,
+							Computed:    true,
+							Description: "The eni id to bind with the EIP.",
+						},
+						"create_time": {
+							Type:        schema.TypeString,
+							Computed:    true,
+							Description: "Creation time of the EIP.",
+						},
+						"tags": {
+							Type:        schema.TypeMap,
+							Computed:    true,
+							Description: "Tags of the EIP.",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func dataSourceTencentCloudEipsRead(d *schema.ResourceData, meta interface{}) error {
+	defer logElapsed("data_source.cloud_eips.read")()
+	logId := getLogId(contextNil)
+	ctx := context.WithValue(context.TODO(), logIdKey, logId)
+
+	client := meta.(*TencentCloudClient).apiV3Conn
+	vpcService := VpcService{client: client}
+	tagService := TagService{client: client}
+	region := client.Region
+
+	filter := make(map[string][]string)
+	if v, ok := d.GetOk("eip_id"); ok {
+		filter["address-id"] = []string{v.(string)}
+	}
+	if v, ok := d.GetOk("eip_name"); ok {
+		filter["address-name"] = []string{v.(string)}
+	}
+	if v, ok := d.GetOk("public_ip"); ok {
+		filter["public-ip"] = []string{v.(string)}
+	}
+
+	tags := helper.GetTags(d, "tags")
+
+	var eips []*vpc.Address
+	var errRet error
+	err := resource.Retry(readRetryTimeout, func() *resource.RetryError {
+		eips, errRet = vpcService.DescribeEipByFilter(ctx, filter)
+		if errRet != nil {
+			return retryError(errRet, InternalError)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	eipList := make([]map[string]interface{}, 0, len(eips))
+	ids := make([]string, 0, len(eips))
+
+EIP_LOOP:
+	for _, eip := range eips {
+		respTags, err := tagService.DescribeResourceTags(ctx, VPC_SERVICE_TYPE, EIP_RESOURCE_TYPE, region, *eip.AddressId)
+		if err != nil {
+			log.Printf("[CRITAL]%s describe eip tags failed: %+v", logId, err)
+			return err
+		}
+
+		for k, v := range tags {
+			if respTags[k] != v {
+				continue EIP_LOOP
+			}
+		}
+
+		mapping := map[string]interface{}{
+			"eip_id":      eip.AddressId,
+			"eip_name":    eip.AddressName,
+			"eip_type":    eip.AddressType,
+			"status":      eip.AddressStatus,
+			"public_ip":   eip.AddressIp,
+			"instance_id": eip.InstanceId,
+			"eni_id":      eip.NetworkInterfaceId,
+			"create_time": eip.CreatedTime,
+			"tags":        respTags,
+		}
+
+		eipList = append(eipList, mapping)
+		ids = append(ids, *eip.AddressId)
+	}
+
+	d.SetId(helper.DataResourceIdsHash(ids))
+	err = d.Set("eip_list", eipList)
+	if err != nil {
+		log.Printf("[CRITAL]%s provider set eip list fail, reason:%s\n ", logId, err.Error())
+		return err
+	}
+
+	output, ok := d.GetOk("result_output_file")
+	if ok && output.(string) != "" {
+		if err := writeToFile(output.(string), eipList); err != nil {
+			return err
+		}
+	}
+	return nil
+}
