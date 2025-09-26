@@ -33,7 +33,7 @@ func init() {
 			"rule_id":            "用于查询的指定权限组规则ID",
 			"result_output_file": "用于保存结果，可视化界面不可用",
 			"rule_list":          "TurboFs权限组规则的信息列表",
-			"auth_client_ip":     "权限组规则的允许IP",
+			"auth_client_ip":     "允许访问的客户端IP地址或地址段",
 			"rw_permission":      "读取和写入权限",
 			"user_permission":    "权限组用户的权限",
 			"priority":           "权限组规则的优先级",

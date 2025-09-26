@@ -28,7 +28,7 @@ use day of month
 	}
 
 ```
-# Import
+Import
 
 turbofs auto_snapshot_policy can be imported using the id, e.g.
 

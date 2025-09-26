@@ -36,7 +36,7 @@ func init() {
 		DescriptionCN:   "提供TurboFS权限规则资源，用于创建和管理TurboFS权限规则。",
 		AttributesCN: map[string]string{
 			"p_group_id":      "权限组ID",
-			"auth_client_ip":  "许访问的客户端IP地址或地址段",
+			"auth_client_ip":  "允许访问的客户端IP地址或地址段",
 			"rw_permission":   "读写权限, 可选参数：ro, rw。ro为只读，rw为读写，不填默认为读写",
 			"user_permission": "用户权限，可选参数：all_squash，no_all_squash，root_squash，no_root_squash。其中all_squash为所有访问用户都会被映射为匿名用户或用户组；no_all_squash为访问用户会先与本机用户匹配，匹配失败后再映射为匿名用户或用户组；root_squash为将来访的root用户映射为匿名用户或用户组；no_root_squash为来访的root用户保持root帐号权限。不填默认为no_root_squash。",
 			"rule_id":         "规则ID",
@@ -62,7 +62,7 @@ func resourceTencentCloudTurbofsRule() *schema.Resource {
 			"auth_client_ip": {
 				Type:        schema.TypeString,
 				Required:    true,
-				Description: "A single IP or a single IP address range such as 203.0.113.11 or 10.10.1.0/24 indicates that all IPs are allowed. Please note that the IP entered should be CVM's private IP.",
+				Description: "A single IP or a single IP address range such as 10.1.10.11 or 10.10.1.0/24 indicates that all IPs are allowed. Please note that the IP entered should be CVM's private IP.",
 			},
 			"priority": {
 				Type:         schema.TypeInt,
@@ -79,7 +79,7 @@ func resourceTencentCloudTurbofsRule() *schema.Resource {
 			"user_permission": {
 				Type:        schema.TypeString,
 				Optional:    true,
-				Default:     TURBOFS_USER_PERMISSION_ROOT_SQUASH,
+				Default:     TURBOFS_USER_PERMISSION_NO_ROOT_SQUASH,
 				Description: "The permissions of users. Valid values are `all_squash`, `no_all_squash`, `root_squash` and `no_root_squash`. and default is `root_squash`. `all_squash` indicates that all users are mapped as anonymous users or user groups; `no_all_squash` indicates that users will match local users first and be mapped to anonymous users or user groups after matching failed; `root_squash` indicates that map root users to anonymous users or user groups; `no_root_squash` indicates that root users keep root account permission.",
 			},
 			"rule_id": {

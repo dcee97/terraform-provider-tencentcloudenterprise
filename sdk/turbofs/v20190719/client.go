@@ -968,3 +968,27 @@ func (c *Client) OverrideCfsRules(request *OverrideCfsRulesRequest) (response *O
 	err = c.Send(request, response)
 	return
 }
+
+func NewScaleUpFileSystemRequest() (request *ScaleUpFileSystemRequest) {
+	request = &ScaleUpFileSystemRequest{
+		BaseRequest: &tchttp.BaseRequest{},
+	}
+	request.Init().WithApiInfo("turbofs", APIVersion, "ScaleUpFileSystem")
+	return
+}
+
+func NewScaleUpFileSystemResponse() (response *ScaleUpFileSystemResponse) {
+	response = &ScaleUpFileSystemResponse{
+		BaseResponse: &tchttp.BaseResponse{},
+	}
+	return
+}
+
+func (c *Client) ScaleUpFileSystem(request *ScaleUpFileSystemRequest) (response *ScaleUpFileSystemResponse, err error) {
+	if request == nil {
+		request = NewScaleUpFileSystemRequest()
+	}
+	response = NewScaleUpFileSystemResponse()
+	err = c.Send(request, response)
+	return
+}

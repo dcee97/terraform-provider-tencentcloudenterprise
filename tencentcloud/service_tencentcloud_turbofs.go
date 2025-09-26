@@ -20,12 +20,9 @@ type TurbofsService struct {
 func (me *TurbofsService) DescribeFileSystem(ctx context.Context, fsId *string) (fs []*turbofs.FileSystemInfo, errRet error) {
 	logId := getLogId(ctx)
 	request := turbofs.NewDescribeCfsFileSystemsRequest()
-	var filter *turbofs.Filter
 
 	if fsId != nil {
-		filter.Name = helper.String("FileSystemId")
-		filter.Values = []*string{fsId}
-		request.Filters = []*turbofs.Filter{filter}
+		request.FileSystemId = fsId
 	}
 
 	ratelimit.Check(request.GetAction())
@@ -82,11 +79,11 @@ func (me *TurbofsService) ModifyFileSystemName(ctx context.Context, fsId, fsName
 	return nil
 }
 
-func (me *TurbofsService) ModifyFileSystemAccessGroup(ctx context.Context, fsId, accessGroupId string) error {
+func (me *TurbofsService) ModifyFileSystemPGroup(ctx context.Context, fsId, pGroupId string) error {
 	logId := getLogId(ctx)
 	request := turbofs.NewUpdateCfsFileSystemPGroupRequest()
 	request.FileSystemId = &fsId
-	request.PGroupId = &accessGroupId
+	request.PGroupId = &pGroupId
 
 	ratelimit.Check(request.GetAction())
 	response, err := me.client.UseTurbofsClient().UpdateCfsFileSystemPGroup(request)
@@ -99,6 +96,58 @@ func (me *TurbofsService) ModifyFileSystemAccessGroup(ctx context.Context, fsId,
 		logId, request.GetAction(), request.ToJsonString(), response.ToJsonString())
 
 	return nil
+}
+
+func (me *TurbofsService) ScaleUpFileSystem(ctx context.Context, fsId string, targetCapacity uint64) error {
+	logId := getLogId(ctx)
+	request := turbofs.NewScaleUpFileSystemRequest()
+	request.FileSystemId = &fsId
+	request.TargetCapacity = &targetCapacity
+
+	ratelimit.Check(request.GetAction())
+	response, err := me.client.UseTurbofsClient().ScaleUpFileSystem(request)
+	if err != nil {
+		log.Printf("[CRITAL]%s api[%s] fail, request body [%s], reason[%s]\n",
+			logId, request.GetAction(), request.ToJsonString(), err.Error())
+		return err
+	}
+	log.Printf("[DEBUG]%s api[%s] success, request body [%s], response body [%s]\n",
+		logId, request.GetAction(), request.ToJsonString(), response.ToJsonString())
+
+	return nil
+}
+
+func (me *TurbofsService) WaitForFileSystemAvailable(ctx context.Context, fsId string) error {
+	logId := getLogId(ctx)
+
+	return resource.Retry(10*readRetryTimeout, func() *resource.RetryError {
+		fileSystems, errRet := me.DescribeFileSystem(ctx, &fsId)
+		if errRet != nil {
+			log.Printf("[DEBUG]%s describe file system fail, reason[%s]\n", logId, errRet.Error())
+			return retryError(errRet, InternalError)
+		}
+		if fileSystems == nil || len(fileSystems) < 1 {
+			return resource.RetryableError(fmt.Errorf("file system %s not found", fsId))
+		}
+
+		fileSystem := fileSystems[0]
+		if fileSystem.LifeCycleState == nil {
+			return resource.RetryableError(fmt.Errorf("file system %s state is nil", fsId))
+		}
+
+		log.Printf("[DEBUG]%s file system %s current state: %s\n", logId, fsId, *fileSystem.LifeCycleState)
+
+		if *fileSystem.LifeCycleState == TURBOFS_LIFECYCLE_STATE_AVAILABLE {
+			return nil
+		}
+		if *fileSystem.LifeCycleState == TURBOFS_LIFECYCLE_STATE_CREATING {
+			return resource.RetryableError(fmt.Errorf("file system %s is still creating", fsId))
+		}
+		if *fileSystem.LifeCycleState == TURBOFS_LIFECYCLE_STATE_EXPANDING {
+			return resource.RetryableError(fmt.Errorf("file system %s is still expanding", fsId))
+		}
+		return resource.NonRetryableError(fmt.Errorf("file system %s creation failed, current state: %s", fsId, *fileSystem.LifeCycleState))
+	})
 }
 
 func (me *TurbofsService) DeleteFileSystem(ctx context.Context, fsId string) error {

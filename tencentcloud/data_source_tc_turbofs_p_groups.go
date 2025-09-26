@@ -1,11 +1,10 @@
 /*
 Use this data source to query the detail information of Turbofs permission group.
 
-# Example Usage
-
+Example Usage
 ```hcl
 
-	data "cloud_turbofs_pgroup" "pgroup" {
+	data "cloud_turbofs_p_groups" "pgroup" {
 	  p_group_id = "pgroup-7nx89k7l"
 	}
 

@@ -7,8 +7,6 @@ Use this data source to query the detail information of TurboFS file systems.
 
 	data "cloud_turbofs_file_systems" "file_systems" {
 	  file_system_id    = "turbofs-6hgquxmj"
-	  name              = "test"
-	  zone = "ap-guangzhou-3"
 	}
 
 ```
@@ -238,7 +236,7 @@ func dataSourceTencentCloudTurbofsFileSystems() *schema.Resource {
 							Description: "Tiering detail",
 						},
 						"tiering_state": {
-							Type:        schema.TypeInt,
+							Type:        schema.TypeString,
 							Computed:    true,
 							Description: "Tiering state.",
 						},
@@ -353,6 +351,198 @@ func dataSourceTencentCloudTurbofsFileSystemsRead(d *schema.ResourceData, meta i
 
 	fileSystemList := make([]map[string]interface{}, 0, len(fileSystems))
 	ids := make([]string, 0, len(fileSystems))
+
+	for _, fileSystem := range fileSystems {
+		fileSystemMap := make(map[string]interface{})
+
+		if fileSystem.FileSystemId != nil {
+			fileSystemMap["file_system_id"] = *fileSystem.FileSystemId
+			ids = append(ids, *fileSystem.FileSystemId)
+		}
+
+		if fileSystem.CreationTime != nil {
+			fileSystemMap["creation_time"] = *fileSystem.CreationTime
+		}
+
+		if fileSystem.CreationToken != nil {
+			fileSystemMap["creation_token"] = *fileSystem.CreationToken
+		}
+
+		if fileSystem.FsName != nil {
+			fileSystemMap["fs_name"] = *fileSystem.FsName
+		}
+
+		if fileSystem.Zone != nil {
+			fileSystemMap["zone"] = *fileSystem.Zone
+		}
+
+		if fileSystem.ZoneId != nil {
+			fileSystemMap["zone_id"] = helper.UInt64ToStr(*fileSystem.ZoneId)
+		}
+
+		if fileSystem.LifeCycleState != nil {
+			fileSystemMap["life_cycle_state"] = *fileSystem.LifeCycleState
+		}
+
+		if fileSystem.SizeByte != nil {
+			fileSystemMap["size_byte"] = int(*fileSystem.SizeByte)
+		}
+
+		if fileSystem.SizeLimit != nil {
+			fileSystemMap["size_limit"] = int(*fileSystem.SizeLimit)
+		}
+
+		if fileSystem.SizeLimitMax != nil {
+			fileSystemMap["size_limit_max"] = int(*fileSystem.SizeLimitMax)
+		}
+
+		if fileSystem.Protocol != nil {
+			fileSystemMap["protocol"] = *fileSystem.Protocol
+		}
+
+		if fileSystem.CfsVersion != nil {
+			fileSystemMap["cfs_version"] = *fileSystem.CfsVersion
+		}
+
+		if fileSystem.Capacity != nil {
+			fileSystemMap["capacity"] = int(*fileSystem.Capacity)
+		}
+
+		if fileSystem.PoolId != nil {
+			fileSystemMap["pool_id"] = *fileSystem.PoolId
+		}
+
+		if fileSystem.SnapshotId != nil {
+			fileSystemMap["snap_id"] = *fileSystem.SnapshotId
+		}
+
+		if fileSystem.SnapStatus != nil {
+			fileSystemMap["snap_status"] = *fileSystem.SnapStatus
+		}
+
+		if fileSystem.StorageType != nil {
+			fileSystemMap["storage_type"] = *fileSystem.StorageType
+		}
+
+		if fileSystem.BandwidthLimit != nil {
+			fileSystemMap["bandwidth_limit"] = *fileSystem.BandwidthLimit
+		}
+
+		if fileSystem.AppId != nil {
+			fileSystemMap["app_id"] = int(*fileSystem.AppId)
+		}
+
+		if fileSystem.IpAddress != nil {
+			fileSystemMap["ip_address"] = *fileSystem.IpAddress
+		}
+
+		if fileSystem.AllocedSpace != nil {
+			fileSystemMap["alloced_space"] = int(*fileSystem.AllocedSpace)
+		}
+
+		if fileSystem.StorageResourcePkg != nil {
+			fileSystemMap["storage_resource_pkg"] = *fileSystem.StorageResourcePkg
+		}
+
+		if fileSystem.BandwidthResourcePkg != nil {
+			fileSystemMap["bandwidth_resource_pkg"] = *fileSystem.BandwidthResourcePkg
+		}
+
+		if fileSystem.Encrypted != nil {
+			fileSystemMap["encrypted"] = *fileSystem.Encrypted
+		}
+
+		if fileSystem.KmsKeyId != nil {
+			fileSystemMap["kms_key_id"] = *fileSystem.KmsKeyId
+		}
+
+		if fileSystem.TagId != nil {
+			fileSystemMap["tag_id"] = int(*fileSystem.TagId)
+		}
+
+		if fileSystem.TagName != nil {
+			fileSystemMap["tag_name"] = *fileSystem.TagName
+		}
+
+		// Handle PGroup
+		if fileSystem.PGroup != nil {
+			pGroupList := make([]map[string]interface{}, 0, 1)
+			pGroupMap := make(map[string]interface{})
+
+			if fileSystem.PGroup.PGroupId != nil {
+				pGroupMap["p_group_id"] = *fileSystem.PGroup.PGroupId
+			}
+
+			if fileSystem.PGroup.Name != nil {
+				pGroupMap["name"] = *fileSystem.PGroup.Name
+			}
+
+			pGroupList = append(pGroupList, pGroupMap)
+			fileSystemMap["p_group"] = pGroupList
+		}
+
+		// Handle TieringDetail
+		if fileSystem.TieringDetail != nil {
+			tieringDetailList := make([]map[string]interface{}, 0, 1)
+			tieringDetailMap := make(map[string]interface{})
+
+			if fileSystem.TieringDetail.TieringSizeInBytes != nil {
+				tieringDetailMap["tiering_size_in_bytes"] = int(*fileSystem.TieringDetail.TieringSizeInBytes)
+			}
+
+			tieringDetailList = append(tieringDetailList, tieringDetailMap)
+			fileSystemMap["tiering_detail"] = tieringDetailList
+		} else {
+			fileSystemMap["tiering_detail"] = []map[string]interface{}{}
+		}
+
+		// Handle TieringState
+		if fileSystem.TieringState != nil {
+			fileSystemMap["tiering_state"] = *fileSystem.TieringState
+		} else {
+			fileSystemMap["tiering_state"] = ""
+		}
+
+		// Handle AutoSnapshotPolicyId
+		if fileSystem.AutoSnapshotPolicyId != nil {
+			fileSystemMap["auto_snapshot_policy_id"] = *fileSystem.AutoSnapshotPolicyId
+		} else {
+			fileSystemMap["auto_snapshot_policy_id"] = ""
+		}
+
+		// Handle AutoScaleUpRule
+		if fileSystem.AutoScaleUpRule != nil {
+			fileSystemMap["auto_scale_up_rule"] = *fileSystem.AutoScaleUpRule
+		} else {
+			fileSystemMap["auto_scale_up_rule"] = ""
+		}
+
+		// Handle SpecPolicy
+		if fileSystem.SpecPolicy != nil {
+			fileSystemMap["spec_policy"] = *fileSystem.SpecPolicy
+		} else {
+			fileSystemMap["spec_policy"] = ""
+		}
+
+		// Handle Tags
+		if fileSystem.Tags != nil && len(fileSystem.Tags) > 0 {
+			// Convert tags to string representation or handle as needed
+			tagsStr := ""
+			for i, tag := range fileSystem.Tags {
+				if tag.TagKey != nil && tag.TagValue != nil {
+					if i > 0 {
+						tagsStr += ","
+					}
+					tagsStr += *tag.TagKey + ":" + *tag.TagValue
+				}
+			}
+			fileSystemMap["tags"] = tagsStr
+		} else {
+			fileSystemMap["tags"] = ""
+		}
+
+		fileSystemList = append(fileSystemList, fileSystemMap)
+	}
 
 	d.SetId(helper.DataResourceIdsHash(ids))
 	err = d.Set("file_system_list", fileSystemList)

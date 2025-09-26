@@ -7,7 +7,7 @@ Provides a resource to create a turbofs auto_snapshot_policy_attachment
 
 	resource "cloud_turbofs_auto_snapshot_policy_attachment" "auto_snapshot_policy_attachment" {
 	  auto_snapshot_policy_id = "asp-basic"
-	  file_system_ids         = "turbofs-4xzkct19"
+	  file_system_id          = "turbofs-4xzkct19"
 	}
 
 ```

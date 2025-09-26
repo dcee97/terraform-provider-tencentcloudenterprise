@@ -936,6 +936,8 @@ type CreateCfsFileSystemRequest struct {
 	// TURBO文件系统的容量（TiB）
 
 	Capacity *uint64 `json:"Capacity,omitempty" name:"Capacity"`
+
+	TagId *uint64 `json:"TagId,omitempty" name:"TagId"`
 }
 
 func (r *CreateCfsFileSystemRequest) ToJsonString() string {
@@ -1196,6 +1198,33 @@ type FileSystemInfo struct {
 	// appid
 
 	AppId *uint64 `json:"AppId,omitempty" name:"AppId"`
+
+	CfsVersion *string `json:"CfsVersion,omitempty" name:"CfsVersion"`
+
+	Capacity *uint64 `json:"Capacity,omitempty" name:"Capacity"`
+
+	CfsId *string `json:"CfsId,omitempty" name:"CfsId"`
+
+	PoolId *string `json:"PoolId,omitempty" name:"PoolId"`
+
+	ProjectId *string `json:"ProjectId,omitempty" name:"ProjectId"`
+
+	TieringDetail *TieringDetail `json:"TieringDetail,omitempty" name:"TieringDetail"`
+
+	TieringState *string `json:"TieringState,omitempty" name:"TieringState"`
+
+	AutoSnapshotPolicyId *string `json:"AutoSnapshotPolicyId,omitempty" name:"AutoSnapshotPolicyId"`
+
+	AutoScaleUpRule *string `json:"AutoScaleUpRule,omitempty" name:"AutoScaleUpRule"`
+
+	SpecPolicy *string `json:"SpecPolicy,omitempty" name:"SpecPolicy"`
+
+	Tags []*ResourceTags `json:"Tags,omitempty" name:"Tags"`
+}
+
+type TieringDetail struct {
+	// TieringSizeInBytes
+	TieringSizeInBytes *int64 `json:"TieringSizeInBytes,omitempty" name:"TieringSizeInBytes"`
 }
 
 type DescribeCfsFileSystemClientsRequest struct {
@@ -2387,5 +2416,42 @@ func (r *UpdateCfsFileSystemPGroupRequest) ToJsonString() string {
 }
 
 func (r *UpdateCfsFileSystemPGroupRequest) FromJsonString(s string) error {
+	return json.Unmarshal([]byte(s), &r)
+}
+
+type ScaleUpFileSystemRequest struct {
+	*tchttp.BaseRequest
+
+	TargetCapacity *uint64 `json:"TargetCapacity,omitempty" name:"TargetCapacity"`
+
+	FileSystemId *string `json:"FileSystemId,omitempty" name:"FileSystemId"`
+}
+
+func (r *ScaleUpFileSystemRequest) ToJsonString() string {
+	b, _ := json.Marshal(r)
+	return string(b)
+}
+
+func (r *ScaleUpFileSystemRequest) FromJsonString(s string) error {
+	return json.Unmarshal([]byte(s), &r)
+}
+
+type ScaleUpFileSystemResponse struct {
+	*tchttp.BaseResponse
+	Response *struct {
+		TargetCapacity *uint64 `json:"TargetCapacity,omitempty" name:"TargetCapacity"`
+
+		FileSystemId *string `json:"FileSystemId,omitempty" name:"FileSystemId"`
+
+		RequestId *string `json:"RequestId,omitempty" name:"RequestId"`
+	}
+}
+
+func (r *ScaleUpFileSystemResponse) ToJsonString() string {
+	b, _ := json.Marshal(r)
+	return string(b)
+}
+
+func (r *ScaleUpFileSystemResponse) FromJsonString(s string) error {
 	return json.Unmarshal([]byte(s), &r)
 }
